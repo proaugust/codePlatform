@@ -1,0 +1,29 @@
+[project]
+name = "code-platform"
+version = "0.1.0"
+description = "FastAPI skeleton with Vue / React frontends"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic-settings>=2.6.0",
+    "httpx>=0.27.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.13"
+
+[tool.black]
+line-length = 130
+
+[tool.ruff]
+line-length = 130
+
+[tool.ruff.format]
+skip-magic-trailing-comma = true

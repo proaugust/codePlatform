@@ -1,0 +1,47 @@
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/*
+!.vscode/launch.json
+*.swp
+*.swo
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# 本地启动脚本（含路径信息）
+*.bat
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Frontend
+node_modules/
+frontend-vue/dist/
+frontend-react/dist/
+
+# Static (production build output)
+static/
+
+# Generated projects (keep folder markers)
+auto_code/java/**
+auto_code/go/**
+!auto_code/java/.gitkeep
+!auto_code/go/.gitkeep

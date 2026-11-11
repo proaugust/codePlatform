@@ -1,0 +1,53 @@
+node_modules/
+dist/
+build/
+.git/
+
+
+# Python 编译缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 虚拟环境请只写在 .cursorindexingignore，不要忽略 .venv（否则 Python 扩展解析不到解释器）
+
+# 日志文件
+*.log
+*.tmp
+
+# 数据库文件（二进制，AI 无法理解）
+*.db
+*.sqlite
+*.sqlite3
+
+# 操作系统垃圾
+.DS_Store
+Thumbs.db
+
+# 锁文件与依赖描述（体积大，日常无需索引）
+uv.lock
+package-lock.json
+yarn.lock
+
+# 二进制模型与人脸权重（体积大，AI 无法理解）
+*.bin
+vue-manage-system-master/public/models/
+vue-manage-system-master/public/models/*.json
+data/
+
+# 大体积地理/图表数据
+**/world.json
+**/kanto-geo.json
+*.csv
+
+# 截图与自动生成文件
+vue-manage-system-master/screenshots/
+auto-imports.d.ts
+components.d.ts
+**/*.map
+
+# 前端静态资源与大体积源文件（日常无需索引）
+vue-manage-system-master/src/assets/img/
+vue-manage-system-master/src/utils/china.ts
+vue-manage-system-master/src/locales/
