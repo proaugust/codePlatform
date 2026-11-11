@@ -32,10 +32,14 @@ uv run uvicorn backend.main:app --host 127.0.0.1 --port 8001 --reload
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/agent/analyze` | body: `{ "spec", "target": "java\|go" }` → 写 docs 四件套 |
+| POST | `/agent/analyze` | body: `{ "spec", "target": "java\|go" }` → 5+1 前半：RepoIntel→Requirements→Planner，写 docs + IR |
 | GET | `/agent/{target}/docs` | 读取已生成文档 |
-| POST | `/agent/generate` | body: `{ "target", "use_docs": true }` → 生成代码 |
+| GET | `/agent/{target}/run` | 编排状态 / plan 摘要 |
+| POST | `/agent/plan/confirm` | body: `{ "target" }` → 批准 change_plan（`AUTO_APPROVE_PLAN=true` 时可跳过） |
+| POST | `/agent/generate` | body: `{ "target", "use_docs": true }` → Coder⇄Validator→Review |
 | GET | `/agent/{target}/status` | 产物目录状态 |
+
+内部 Agent：Orchestrator + Requirements / RepoIntel / Planner / Coder / Validator。IR 落在 `auto_code/{target}/docs/ir/`。
 
 ## 需求四件套（写在 `auto_code/{target}/docs/`）
 
