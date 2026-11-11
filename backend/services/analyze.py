@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any
 
 from backend.core.config import settings
-from backend.services.structure import write_structure_doc  # noqa: F401 — 兼容旧导入
 
 logger = logging.getLogger(__name__)
 

@@ -3,9 +3,16 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from backend.schemas.generate import AnalyzeResponse, DocsResponse, GenerateResponse, StatusResponse
+from backend.schemas.generate import (
+    AnalyzeResponse,
+    DocsResponse,
+    GenerateResponse,
+    RunStatusResponse,
+    StatusResponse,
+)
 from backend.services.analyze import AnalyzeError, analyze_requirements, read_docs
-from backend.services.codegen import SUPPORTED_LANGS, CodegenError, generate_project, project_status
+from backend.services.codegen import SUPPORTED_LANGS, CodegenError, project_status
+from backend.services.orchestrator import OrchestratorError, confirm_plan, get_run_status, run_generate
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -19,6 +26,10 @@ class GenerateBody(BaseModel):
     target: str = Field(..., description="生成目标：java | go")
     spec: str | None = Field(default=None, description="可选补充说明")
     use_docs: bool = Field(default=True, description="是否使用已分析的 docs/")
+
+
+class PlanConfirmBody(BaseModel):
+    target: str = Field(..., description="生成目标：java | go")
 
 
 def _normalize_target(target: str) -> str:
@@ -48,11 +59,59 @@ async def docs(target: str) -> DocsResponse:
     return DocsResponse(**result)
 
 
+@router.post("/plan/confirm", response_model=RunStatusResponse)
+async def plan_confirm(body: PlanConfirmBody) -> RunStatusResponse:
+    target = _normalize_target(body.target)
+    try:
+        result = confirm_plan(target)
+    except OrchestratorError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return RunStatusResponse(
+        lang=result["lang"],
+        state=result["state"],
+        created_at=result.get("created_at"),
+        updated_at=result.get("updated_at"),
+        error=result.get("error"),
+        auto_approve_plan=bool(result.get("auto_approve_plan")),
+        plan_approved=bool(result.get("plan_approved")),
+        plan_summary=result.get("plan_summary"),
+        task_count=int(result.get("task_count") or 0),
+        validation_ok=result.get("validation_ok"),
+        repair_count=int(result.get("repair_count") or 0),
+        ir_dir=result.get("ir_dir"),
+    )
+
+
+@router.get("/{target}/run", response_model=RunStatusResponse)
+async def run_status(target: str) -> RunStatusResponse:
+    target = _normalize_target(target)
+    try:
+        result = get_run_status(target)
+    except OrchestratorError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return RunStatusResponse(
+        lang=result["lang"],
+        state=result["state"],
+        created_at=result.get("created_at"),
+        updated_at=result.get("updated_at"),
+        error=result.get("error"),
+        auto_approve_plan=bool(result.get("auto_approve_plan")),
+        plan_approved=bool(result.get("plan_approved")),
+        plan_summary=result.get("plan_summary"),
+        task_count=int(result.get("task_count") or 0),
+        validation_ok=result.get("validation_ok"),
+        repair_count=int(result.get("repair_count") or 0),
+        ir_dir=result.get("ir_dir"),
+    )
+
+
 @router.post("/generate", response_model=GenerateResponse)
 async def generate(body: GenerateBody) -> GenerateResponse:
     target = _normalize_target(body.target)
     try:
-        result = await generate_project(target, body.spec, use_docs=body.use_docs)
+        result = await run_generate(target, body.spec, use_docs=body.use_docs)
+    except OrchestratorError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except CodegenError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return GenerateResponse(**result)
