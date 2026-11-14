@@ -8,7 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 DEFAULT_AUTO_CODE_LANGS = ("java", "go")
-LANG_PORTS: dict[str, int] = {"java": 8081, "go": 8082}
+LANG_PORTS: dict[str, int] = {"java": 8070, "go": 8072}
 
 
 class Settings(BaseSettings):

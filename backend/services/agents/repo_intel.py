@@ -10,7 +10,7 @@ from backend.services.structure import scan_project, write_structure_doc
 logger = logging.getLogger(__name__)
 
 JAVA_BASELINE = {
-    "stack": "Spring Boot 3.x / Maven / Java 17+",
+    "stack": "Spring Boot 3.x / Maven / Java 21",
     "package_root": "com.example.autocode",
     "layers": ["controller", "service", "repository"],
     "conventions": [

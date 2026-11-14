@@ -23,7 +23,8 @@ class CodegenError(RuntimeError):
 def _system_prompt(lang: str, port: int) -> str:
     if lang == "java":
         stack = (
-            "Generate a complete runnable Spring Boot 3.x Maven backend (Java 17+). "
+            "Generate a complete runnable Spring Boot 3.x Maven backend (Java 21). "
+            "pom.xml MUST set <java.version>21</java.version>. "
             "Must include pom.xml, application.yml (or application.properties), "
             "main Application class, entities/repositories if DB tables exist, and REST controllers. "
             f"Server port MUST be {port}. Enable CORS for "
