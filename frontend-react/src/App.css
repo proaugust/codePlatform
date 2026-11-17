@@ -100,6 +100,34 @@ button:disabled {
   cursor: not-allowed;
 }
 
+button.btn-secondary {
+  background: #0f766e;
+}
+
+.fe-url-line {
+  margin: 0.35rem 0 0;
+  font-size: 0.95rem;
+}
+
+.fe-url-line a {
+  color: #0f766e;
+  font-weight: 600;
+}
+
+a.link-btn {
+  display: inline-block;
+  padding: 0.55rem 1rem;
+  border-radius: 6px;
+  background: #e5e7eb;
+  color: #111827;
+  text-decoration: none;
+  font-size: 0.95rem;
+}
+
+a.link-btn:hover {
+  background: #d1d5db;
+}
+
 .muted {
   color: #6b7280;
   font-size: 0.9rem;

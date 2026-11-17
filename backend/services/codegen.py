@@ -29,7 +29,8 @@ def _system_prompt(lang: str, port: int) -> str:
             "main Application class, entities/repositories if DB tables exist, and REST controllers. "
             f"Server port MUST be {port}. Enable CORS for "
             "http://localhost:5173, http://127.0.0.1:5173, "
-            "http://localhost:5174, http://127.0.0.1:5174. "
+            "http://localhost:5174, http://127.0.0.1:5174, "
+            "http://localhost:5175, http://127.0.0.1:5175. "
             "Package root: com.example.autocode. "
             "Prefer H2 in-memory for local demo unless docs require otherwise."
         )
@@ -39,7 +40,8 @@ def _system_prompt(lang: str, port: int) -> str:
             "Must include go.mod (module example.com/autocode), main.go, and handlers. "
             f"Listen on :{port}. Enable CORS for "
             "http://localhost:5173, http://127.0.0.1:5173, "
-            "http://localhost:5174, http://127.0.0.1:5174. "
+            "http://localhost:5174, http://127.0.0.1:5174, "
+            "http://localhost:5175, http://127.0.0.1:5175. "
             "No third-party web frameworks."
         )
 
@@ -187,6 +189,10 @@ def project_status(lang: str) -> dict[str, Any]:
     file_count = 0
     if root.is_dir():
         file_count = sum(1 for p in root.rglob("*") if p.is_file())
+    from backend.services.frontend_codegen import FRONTEND_PORT, frontend_root
+
+    fe_root = frontend_root(lang)
+    fe_exists = fe_root.is_dir() and any(fe_root.iterdir())
     return {
         "lang": lang,
         "port": port,
@@ -201,4 +207,7 @@ def project_status(lang: str) -> dict[str, Any]:
         "suggested_tests": [
             {"method": "GET", "path": "/health", "url": f"/{lang}-api/health"},
         ],
+        "frontend_exists": fe_exists,
+        "frontend_root": str(fe_root) if fe_exists else None,
+        "frontend_port": FRONTEND_PORT if fe_exists else None,
     }

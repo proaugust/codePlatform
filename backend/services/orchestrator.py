@@ -13,6 +13,7 @@ from backend.services.agents.requirements import RequirementsError, run_requirem
 from backend.services.agents.validator import run_validator
 from backend.services.analyze import docs_dir, read_docs
 from backend.services.codegen import CodegenError, SUPPORTED_LANGS
+from backend.services.frontend_codegen import FrontendCodegenError, generate_frontend
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +157,12 @@ def confirm_plan(lang: str) -> dict[str, Any]:
     return get_run_status(lang)
 
 
-def _write_review(lang: str, codegen_result: dict[str, Any], validation: dict[str, Any]) -> dict[str, str]:
+def _write_review(
+    lang: str,
+    codegen_result: dict[str, Any],
+    validation: dict[str, Any],
+    frontend_result: dict[str, Any] | None = None,
+) -> dict[str, str]:
     plan = ir.read_change_plan(lang) or {}
     lines = [
         "# 变更报告（Review）",
@@ -179,6 +185,21 @@ def _write_review(lang: str, codegen_result: dict[str, Any], validation: dict[st
     for f in codegen_result.get("files") or []:
         lines.append(f"- `{f}`")
     lines.append("")
+    if frontend_result is not None:
+        lines.append("## 配套 Vue 前端")
+        lines.append("")
+        if frontend_result.get("skipped"):
+            lines.append(f"- 跳过：{frontend_result.get('error') or '不适用'}")
+        elif frontend_result.get("ok"):
+            lines.append(f"- 状态：已生成")
+            lines.append(f"- 目录：`{frontend_result.get('root')}`")
+            lines.append(f"- 端口：`{frontend_result.get('port')}`")
+            lines.append(f"- 文件数：{len(frontend_result.get('files') or [])}")
+            lines.append("- 启动：`cd frontend && npm install && npm run dev`")
+        else:
+            lines.append(f"- 状态：失败（不影响后端）")
+            lines.append(f"- 错误：{frontend_result.get('error') or '未知'}")
+        lines.append("")
     if validation.get("skipped"):
         lines.append("## 校验跳过")
         lines.append("")
@@ -245,14 +266,55 @@ async def run_generate(
             repair_hints = validation.get("repair_hints") or "编译失败，请修复后重新生成完整工程。"
 
         assert last_result is not None
-        _set_run(lang, "REVIEW")
-        _write_review(lang, last_result, validation)
-        _set_run(lang, "DONE", validation_ok=True, error=None)
+
+        frontend_result: dict[str, Any] = {
+            "ok": False,
+            "skipped": True,
+            "error": "未尝试生成前端",
+            "files": [],
+        }
+        _set_run(lang, "FRONTEND", error=None)
+        try:
+            frontend_result = await generate_frontend(
+                lang,
+                endpoints=last_result.get("endpoints") or [],
+                backend_port=last_result.get("port"),
+            )
+        except FrontendCodegenError as e:
+            logger.warning("前端生成失败（不影响后端）lang=%s err=%s", lang, e)
+            frontend_result = {
+                "ok": False,
+                "skipped": False,
+                "error": str(e),
+                "files": [],
+                "port": None,
+                "root": None,
+            }
+        except Exception as e:
+            logger.exception("前端生成异常（不影响后端）lang=%s", lang)
+            frontend_result = {
+                "ok": False,
+                "skipped": False,
+                "error": str(e),
+                "files": [],
+                "port": None,
+                "root": None,
+            }
+
+        _set_run(lang, "REVIEW", frontend_ok=frontend_result.get("ok"))
+        _write_review(lang, last_result, validation, frontend_result)
+        _set_run(lang, "DONE", validation_ok=True, error=None, frontend_ok=frontend_result.get("ok"))
         return {
             **last_result,
             "run_state": "DONE",
             "validation_ok": True,
             "repair_count": validation.get("repair_count", 0),
+            "frontend_ok": frontend_result.get("ok"),
+            "frontend_skipped": bool(frontend_result.get("skipped")),
+            "frontend_port": frontend_result.get("port"),
+            "frontend_root": frontend_result.get("root"),
+            "frontend_files": frontend_result.get("files") or [],
+            "frontend_error": frontend_result.get("error"),
         }
     except CodegenError as e:
         _set_run(lang, "FAILED", error=str(e))
