@@ -40,11 +40,9 @@ frontend-react/dist/
 # Static (production build output)
 static/
 
-# Generated projects (keep folder markers)
-auto_code/java/**
-auto_code/go/**
-!auto_code/java/.gitkeep
-!auto_code/go/.gitkeep
-
-# Platform prefs (may contain LLM API key)
+# Generated projects: track source; ignore deps / build / runtime / secrets
 auto_code/.platform_prefs.json
+auto_code/**/node_modules/
+auto_code/**/logs/
+auto_code/**/target/
+auto_code/**/.vite/

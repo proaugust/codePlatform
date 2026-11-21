@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import Any
 
 import httpx
 
 from backend.core.config import settings
+from backend.services.jsonutil import extract_json_object
 from backend.services.platform_prefs import resolve_llm_config
 
 logger = logging.getLogger(__name__)
@@ -76,3 +78,39 @@ async def chat_completion(*, system: str, user: str) -> str:
         len(content),
     )
     return content
+
+
+async def chat_completion_json(
+    *,
+    system: str,
+    user: str,
+    max_retries: int = 2,
+) -> dict[str, Any]:
+    """调用 LLM 并解析为 JSON 对象；解析失败同 prompt 重试。"""
+    last_err: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            raw = await chat_completion(system=system, user=user)
+            try:
+                return extract_json_object(raw)
+            except ValueError as e:
+                last_err = e
+                preview = f"{raw[:500]}…{raw[-500:]}" if len(raw) > 1000 else raw
+                logger.warning(
+                    "LLM JSON 解析失败 attempt=%d/%d err=%s preview=%s",
+                    attempt + 1,
+                    max_retries + 1,
+                    e,
+                    preview[:800],
+                )
+        except LlmError as e:
+            last_err = e
+            logger.warning(
+                "LLM 调用失败 attempt=%d/%d err=%s",
+                attempt + 1,
+                max_retries + 1,
+                e,
+            )
+    raise LlmError(
+        f"JSON 解析失败，未写入任何文件（已重试 {max_retries} 次）: {last_err}"
+    ) from last_err

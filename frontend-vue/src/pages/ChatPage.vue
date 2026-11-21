@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { usePlatform } from '../composables/usePlatform'
 
 const {
@@ -32,8 +33,11 @@ const {
   onSend,
   onPlan,
   onExecute,
+  onPlanAndExecute,
   onKeydown,
 } = usePlatform()
+
+const applying = computed(() => planning.value || executing.value)
 </script>
 
 <template>
@@ -81,7 +85,7 @@ const {
 
     <div class="chat-panel">
       <div class="chat-panel-head">
-        <strong>聊天窗口</strong>
+        <strong>分析窗口</strong>
         <span class="muted">
           Enter 发送澄清 · 满 {{ maxTurns }} 轮自动总结关闭
           <template v-if="planReady"> · 计划就绪</template>
@@ -93,7 +97,7 @@ const {
       </div>
       <div class="chat-log">
         <div v-if="!messages.length" class="muted chat-empty">
-          描述需求后点「分析计划」；确认计划后再点「执行生成」写 Java/前端代码。生成后仍可继续聊并迭代。
+          描述需求后点「分析并改代码」：会先出计划再写前后端。也可只点「仅分析计划」预览后再改。
         </div>
         <div
           v-for="(m, i) in messages"
@@ -113,7 +117,7 @@ const {
           v-model="input"
           class="chat-input"
           rows="3"
-          placeholder="输入需求澄清…（Enter 发送，Shift+Enter 换行）"
+          placeholder="输入需求…（Enter 发送澄清，Shift+Enter 换行；改代码用下方按钮）"
           :disabled="!canChat"
           @keydown="onKeydown"
         />
@@ -121,21 +125,35 @@ const {
           <button type="button" :disabled="!input.trim() || !canChat" @click="onSend">
             {{ chatting ? '发送中…' : '发送' }}
           </button>
+          <button
+            type="button"
+            class="btn-gen"
+            :disabled="!canPlan || busy"
+            @click="onPlanAndExecute"
+          >
+            {{
+              planning
+                ? '分析中…'
+                : executing
+                  ? '改代码中…'
+                  : '分析并改代码'
+            }}
+          </button>
           <button type="button" class="btn-secondary" :disabled="!canPlan" @click="onPlan">
-            {{ planning ? '分析中…' : '分析计划' }}
+            {{ planning && !executing ? '分析中…' : '仅分析计划' }}
           </button>
-          <button type="button" class="btn-gen" :disabled="!canExecute" @click="onExecute">
-            {{ executing ? '生成中…' : '执行生成' }}
+          <button type="button" class="btn-secondary" :disabled="!canExecute" @click="onExecute">
+            {{ executing && !planning ? '改代码中…' : '仅执行生成' }}
           </button>
-          <span v-if="readyToPlan" class="muted">可分析计划</span>
-          <span v-else-if="planReady" class="muted">可执行生成</span>
-          <span v-else-if="busy && pipelineNote" class="muted">{{ pipelineNote }}</span>
+          <span v-if="applying && pipelineNote" class="muted">{{ pipelineNote }}</span>
+          <span v-else-if="readyToPlan" class="muted">可分析</span>
+          <span v-else-if="planReady" class="muted">可改代码</span>
         </div>
       </div>
 
       <div class="chat-gen-row">
         <span class="muted">
-          流程：聊天 → 分析计划 → 执行生成（不自动启动）
+          流程：澄清（可选）→ 分析并改代码 → 到「运行」页启动
           <template v-if="status"> · 文档 {{ status.has_docs ? '已就绪' : '未生成' }}</template>
           <template v-if="elicitStatus"> · {{ elicitStatus }}</template>
         </span>
@@ -147,7 +165,7 @@ const {
     v-if="conclusionEdit.summary || elicitStatus === 'planned' || rollingSummary"
     class="result"
   >
-    <h2>结论（可编辑；点「分析计划」时一并提交）</h2>
+    <h2>结论（可编辑；分析时一并提交）</h2>
     <label class="label" for="c-summary">摘要</label>
     <textarea
       id="c-summary"

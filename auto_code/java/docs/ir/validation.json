@@ -1,0 +1,17 @@
+{
+  "lang": "java",
+  "ok": true,
+  "skipped": [],
+  "commands": [
+    {
+      "cmd": "D:\\ProgramFiles\\apache-maven-3.8.8\\bin\\mvn.CMD -q -DskipTests compile",
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    }
+  ],
+  "repair_count": 0,
+  "repair_hints": "",
+  "note": ""
+}

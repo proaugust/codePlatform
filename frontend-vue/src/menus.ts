@@ -6,7 +6,7 @@ export type MenuItem = {
 
 /** 顶栏主菜单注册表：增页只改这里 + router 映射 */
 export const menus: MenuItem[] = [
-  { key: 'chat', title: '聊天', path: '/chat' },
+  { key: 'chat', title: '分析', path: '/chat' },
   { key: 'runtime', title: '运行', path: '/runtime' },
   { key: 'docs', title: '文档', path: '/docs' },
   { key: 'artifacts', title: '代码', path: '/artifacts' },

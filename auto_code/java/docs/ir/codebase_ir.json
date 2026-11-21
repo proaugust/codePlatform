@@ -1,0 +1,112 @@
+{
+  "lang": "java",
+  "mode": "greenfield",
+  "baseline": {
+    "stack": "Spring Boot 3.x / Maven / Java 21",
+    "package_root": "com.example.autocode",
+    "layers": [
+      "controller",
+      "service",
+      "repository"
+    ],
+    "conventions": [
+      "REST Controller-Service-Repository",
+      "Prefer H2 in-memory unless docs require otherwise",
+      "Always expose GET /health returning JSON {status:ok}",
+      "Enable CORS for Vite 5173/5174"
+    ],
+    "port": 8070,
+    "mode": "greenfield"
+  },
+  "scan": {
+    "lang": "java",
+    "root": "D:\\code\\py\\demo\\codePlatform\\auto_code\\java",
+    "has_code": true,
+    "build": {
+      "pom": {
+        "path": "pom.xml",
+        "parent": "spring-boot-starter-parent:3.2.5",
+        "key_deps": [
+          "com.h2database:h2",
+          "org.springframework.boot:spring-boot-starter-data-jpa",
+          "org.springframework.boot:spring-boot-starter-test",
+          "org.springframework.boot:spring-boot-starter-validation",
+          "org.springframework.boot:spring-boot-starter-web"
+        ]
+      }
+    },
+    "jpa": {
+      "dependency": true,
+      "entities": [
+        "src/main/java/com/example/autocode/entity/Book.java"
+      ],
+      "repositories": [
+        "src/main/java/com/example/autocode/repository/BookRepository.java"
+      ],
+      "config_hints": [
+        "src/main/resources/application.yml: datasource:",
+        "src/main/resources/application.yml: jpa:",
+        "src/main/resources/application.yml: hibernate:",
+        "src/main/resources/application.yml: hibernate:"
+      ]
+    },
+    "layers": {
+      "controller": [
+        "src/main/java/com/example/autocode/controller/BookController.java",
+        "src/main/java/com/example/autocode/controller/HealthController.java",
+        "src/main/java/com/example/autocode/exception/GlobalExceptionHandler.java"
+      ],
+      "service": [
+        "src/main/java/com/example/autocode/service/BookService.java"
+      ],
+      "repository": [
+        "src/main/java/com/example/autocode/repository/BookRepository.java"
+      ]
+    },
+    "tree": [
+      "src/main/java/com/example/autocode/AutoCodeApplication.java",
+      "src/main/java/com/example/autocode/config/CorsConfig.java",
+      "src/main/java/com/example/autocode/controller/BookController.java",
+      "src/main/java/com/example/autocode/controller/HealthController.java",
+      "src/main/java/com/example/autocode/dto/BookResponse.java",
+      "src/main/java/com/example/autocode/dto/CreateBookRequest.java",
+      "src/main/java/com/example/autocode/dto/UpdateStockRequest.java",
+      "src/main/java/com/example/autocode/entity/Book.java",
+      "src/main/java/com/example/autocode/exception/BusinessException.java",
+      "src/main/java/com/example/autocode/exception/ErrorResponse.java",
+      "src/main/java/com/example/autocode/exception/GlobalExceptionHandler.java",
+      "src/main/java/com/example/autocode/repository/BookRepository.java",
+      "src/main/java/com/example/autocode/service/BookService.java",
+      "src/main/resources/application.yml",
+      "src/test/java/com/example/autocode/BookApiTest.java"
+    ],
+    "apis": [
+      {
+        "method": "GET",
+        "path": "/api/books",
+        "source": "com.example.autocode.controller.BookController (@GetMapping)"
+      },
+      {
+        "method": "GET",
+        "path": "/api/books/{id}",
+        "source": "com.example.autocode.controller.BookController (@GetMapping)"
+      },
+      {
+        "method": "POST",
+        "path": "/api/books",
+        "source": "com.example.autocode.controller.BookController (@PostMapping)"
+      },
+      {
+        "method": "PATCH",
+        "path": "/api/books/{id}/stock",
+        "source": "com.example.autocode.controller.BookController (@PatchMapping)"
+      },
+      {
+        "method": "GET",
+        "path": "/",
+        "source": "com.example.autocode.controller.HealthController (@GetMapping)"
+      }
+    ],
+    "notes": []
+  }
+}

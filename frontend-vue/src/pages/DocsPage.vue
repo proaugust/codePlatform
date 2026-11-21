@@ -83,7 +83,7 @@ onBeforeUnmount(() => {
     </div>
     <div v-else class="docs-result docs-empty">
       <h2>需求文档</h2>
-      <p class="muted">暂无文档。请先在「聊天」中确认结论并生成，或在「设置」中粘贴需求直接生成。</p>
+      <p class="muted">暂无文档。请先在「分析」中确认结论并生成，或在「设置」中粘贴需求直接生成。</p>
     </div>
 
     <pre v-if="error" class="error docs-error">{{ error }}</pre>

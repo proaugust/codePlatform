@@ -1,0 +1,21 @@
+{
+  "session_id": "ff7f07c59ee9",
+  "lang": "java",
+  "status": "drafting",
+  "messages": [
+    {
+      "role": "user",
+      "content": "之前的聊天记录去哪了",
+      "at": "2026-11-17T17:54:30.426827+00:00"
+    },
+    {
+      "role": "assistant",
+      "content": "我这边看不到之前的聊天记录（当前是新的单窗会话），麻烦你把要做的业务需求再简述一下。你希望这个 Java/Spring Boot 系统解决什么核心问题、主要面向哪类用户？",
+      "at": "2026-11-17T17:54:32.252348+00:00"
+    }
+  ],
+  "conclusion": null,
+  "created_at": "2026-11-17T17:49:10.958088+00:00",
+  "updated_at": "2026-11-17T17:58:52.857552+00:00",
+  "confirmed_at": null
+}

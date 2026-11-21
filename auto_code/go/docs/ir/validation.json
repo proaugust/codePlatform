@@ -1,0 +1,17 @@
+{
+  "lang": "go",
+  "ok": true,
+  "skipped": [],
+  "commands": [
+    {
+      "cmd": "D:\\Program Files\\Go\\bin\\go.EXE build ./...",
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    }
+  ],
+  "repair_count": 0,
+  "repair_hints": "",
+  "note": ""
+}

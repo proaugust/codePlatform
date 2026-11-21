@@ -12,8 +12,7 @@ from typing import Any, IO
 
 from backend.core.config import LANG_PORTS, settings
 from backend.services.analyze import AnalyzeError, load_docs_as_spec
-from backend.services.jsonutil import extract_json_object
-from backend.services.llm import LlmError, chat_completion
+from backend.services.llm import LlmError, chat_completion_json
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +31,21 @@ def frontend_root(lang: str) -> Path:
     return settings.auto_code_dir(lang) / FRONTEND_DIR
 
 
-def _system_prompt(*, backend_port: int, frontend_port: int) -> str:
+def _system_prompt(*, backend_port: int, frontend_port: int, incremental: bool) -> str:
+    if incremental:
+        scope = (
+            "Incremental edit of an existing Vue SPA. Output ONLY the requested paths "
+            "(typically src/api/client.ts, list/detail views, router). Preserve unrelated pages. "
+            "Must wire DELETE/PATCH/PUT mutations when those APIs exist (select target then call API)."
+        )
+    else:
+        scope = (
+            "Generate a complete runnable Vue 3 + Vite + TypeScript SPA (no login / no auth). "
+            "Must include: package.json, vite.config.ts, index.html, tsconfig.json, "
+            "tsconfig.app.json, tsconfig.node.json, src/main.ts, src/App.vue, "
+            "src/style.css, src/router/index.ts, src/api/client.ts, and page components "
+            "that fully cover the business APIs in the requirement docs."
+        )
     return (
         "You are a frontend code generation engine. Output a single JSON object only, no markdown.\n"
         "Schema:\n"
@@ -40,11 +53,7 @@ def _system_prompt(*, backend_port: int, frontend_port: int) -> str:
         '  "files": [{"path": "relative/path", "content": "file content"}]\n'
         "}\n"
         "Rules:\n"
-        "- Generate a complete runnable Vue 3 + Vite + TypeScript SPA (no login / no auth).\n"
-        "- Must include: package.json, vite.config.ts, index.html, tsconfig.json, "
-        "tsconfig.app.json, tsconfig.node.json, src/main.ts, src/App.vue, "
-        "src/style.css, src/router/index.ts, src/api/client.ts, and page components "
-        "that fully cover the business APIs in the requirement docs.\n"
+        f"- {scope}\n"
         "- Use vue-router. Use native fetch (no axios). No UI component libraries "
         "(no Element Plus / Ant Design / Naive UI).\n"
         f"- Vite dev server port MUST be {frontend_port}.\n"
@@ -62,7 +71,57 @@ def _system_prompt(*, backend_port: int, frontend_port: int) -> str:
         "- paths must be relative, use forward slashes, no .. or absolute paths.\n"
         "- content must be full file source, not placeholders.\n"
         "- Do NOT include node_modules or lockfiles.\n"
+        "- Return at most 4 files per response.\n"
     )
+
+
+def _frontend_incremental_targets(root: Path, plan: dict[str, Any] | None) -> list[str]:
+    """已有 frontend 时优先改 API 客户端与列表/详情页。"""
+    from_plan: list[str] = []
+    seen: set[str] = set()
+    for task in (plan or {}).get("tasks") or []:
+        if not isinstance(task, dict):
+            continue
+        for f in task.get("files") or []:
+            s = str(f).replace("\\", "/").strip()
+            if s.startswith("frontend/"):
+                s = s[len("frontend/") :]
+            if not s.startswith("src/") or s in seen:
+                continue
+            if ".." in s:
+                continue
+            seen.add(s)
+            from_plan.append(s)
+    defaults = [
+        "src/api/client.ts",
+        "src/views/BookListView.vue",
+        "src/views/BookDetailView.vue",
+        "src/router/index.ts",
+        "src/types.ts",
+    ]
+    # 只保留磁盘已有或 plan 点名的；新建缺失的 client/list
+    out: list[str] = []
+    for p in from_plan + defaults:
+        if p in out:
+            continue
+        if (root / p).is_file() or p in ("src/api/client.ts", "src/views/BookListView.vue"):
+            out.append(p)
+        if len(out) >= 4:
+            break
+    return out or ["src/api/client.ts", "src/views/BookListView.vue"]
+
+
+def _read_fe_snippet(root: Path, rel: str, *, max_chars: int = 5000) -> str:
+    path = root / rel
+    if not path.is_file():
+        return "(file does not exist yet — create it)"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return "(unreadable)"
+    if len(text) > max_chars:
+        return text[:max_chars] + "\n…(truncated)…"
+    return text
 
 
 def _safe_rel_path(raw: str) -> Path:
@@ -402,6 +461,7 @@ async def generate_frontend(
     except AnalyzeError as e:
         raise FrontendCodegenError(str(e)) from e
 
+    plan: dict[str, Any] = {}
     plan_bits = ""
     try:
         from backend.services import ir
@@ -413,6 +473,7 @@ async def generate_frontend(
                 f"summary: {plan.get('summary')}\n"
                 f"apis: {plan.get('apis')}\n"
                 f"data_model: {plan.get('data_model')}\n"
+                f"tasks: {plan.get('tasks')}\n"
             )
     except Exception:
         plan_bits = ""
@@ -423,35 +484,74 @@ async def generate_frontend(
         for e in endpoints
         if isinstance(e, dict) and e.get("path")
     )
-    user = (
-        f"Backend language: {lang}\n"
-        f"Backend port: {api_port}\n"
-        f"Frontend port: {fe_port}\n\n"
-        f"Known endpoints:\n{ep_lines or '(see docs)'}\n\n"
-        f"Requirement documents:\n{doc_spec}"
-        f"{plan_bits}"
+    incremental = (root / "package.json").is_file()
+    system = _system_prompt(backend_port=api_port, frontend_port=fe_port, incremental=incremental)
+
+    written: list[str] = []
+    if incremental:
+        targets = _frontend_incremental_targets(root, plan)
+        snippets = "\n\n".join(f"### {p}\n```\n{_read_fe_snippet(root, p)}\n```" for p in targets)
+        user = (
+            f"Backend language: {lang}\n"
+            f"Backend port: {api_port}\n"
+            f"Frontend port: {fe_port}\n"
+            f"Mode: incremental\n"
+            f"Generate ONLY these paths: {targets}\n\n"
+            f"Known endpoints:\n{ep_lines or '(see docs)'}\n\n"
+            f"Requirement documents:\n{doc_spec[:8000]}"
+            f"{plan_bits}\n\n"
+            f"Current files:\n{snippets}"
+        )
+        try:
+            data = await chat_completion_json(system=system, user=user, max_retries=2)
+        except LlmError as e:
+            raise FrontendCodegenError(str(e)) from e
+        files = data.get("files")
+        if not isinstance(files, list):
+            raise FrontendCodegenError("JSON 缺少 files 数组")
+        # overlay，不清空 frontend / node_modules
+        written = _write_files(root, files)
+        written.append(_write_readme(root, backend_port=api_port, frontend_port=fe_port))
+        written.append(_write_run_bat(root, frontend_port=fe_port))
+    else:
+        # 从零：两批（工程配置 + src）
+        scaffold_user = (
+            f"Backend language: {lang}\nBackend port: {api_port}\nFrontend port: {fe_port}\n"
+            "Mode: greenfield scaffold batch.\n"
+            "Generate ONLY: package.json, vite.config.ts, index.html, tsconfig.json, "
+            "tsconfig.app.json, tsconfig.node.json (max 4 files this turn if needed split).\n\n"
+            f"Known endpoints:\n{ep_lines or '(see docs)'}\n\n"
+            f"Requirement documents:\n{doc_spec[:6000]}{plan_bits}"
+        )
+        src_user = (
+            f"Backend language: {lang}\nBackend port: {api_port}\nFrontend port: {fe_port}\n"
+            "Mode: greenfield src batch.\n"
+            "Generate src/main.ts, src/App.vue, src/style.css, src/router/index.ts, "
+            "src/api/client.ts, and page views covering list/create/detail and DELETE/PATCH.\n"
+            "Max 4 files per response — prioritize client + list + router + types.\n\n"
+            f"Known endpoints:\n{ep_lines or '(see docs)'}\n\n"
+            f"Requirement documents:\n{doc_spec[:8000]}{plan_bits}"
+        )
+        _clear_frontend(root)
+        for user in (scaffold_user, src_user):
+            try:
+                data = await chat_completion_json(system=system, user=user, max_retries=2)
+            except LlmError as e:
+                raise FrontendCodegenError(str(e)) from e
+            files = data.get("files")
+            if not isinstance(files, list):
+                raise FrontendCodegenError("JSON 缺少 files 数组")
+            written.extend(_write_files(root, files[:4]))
+        written.append(_write_readme(root, backend_port=api_port, frontend_port=fe_port))
+        written.append(_write_run_bat(root, frontend_port=fe_port))
+
+    logger.info(
+        "前端生成完成 lang=%s mode=%s files=%d port=%s",
+        lang,
+        "incremental" if incremental else "greenfield",
+        len(written),
+        fe_port,
     )
-
-    try:
-        raw = await chat_completion(system=_system_prompt(backend_port=api_port, frontend_port=fe_port), user=user)
-    except LlmError as e:
-        raise FrontendCodegenError(str(e)) from e
-
-    try:
-        data = extract_json_object(raw)
-    except ValueError as e:
-        raise FrontendCodegenError(str(e)) from e
-
-    files = data.get("files")
-    if not isinstance(files, list):
-        raise FrontendCodegenError("JSON 缺少 files 数组")
-
-    _clear_frontend(root)
-    written = _write_files(root, files)
-    written.append(_write_readme(root, backend_port=api_port, frontend_port=fe_port))
-    written.append(_write_run_bat(root, frontend_port=fe_port))
-
-    logger.info("前端生成完成 lang=%s files=%d port=%s", lang, len(written), fe_port)
     return {
         "ok": True,
         "skipped": False,
@@ -461,6 +561,7 @@ async def generate_frontend(
         "root": str(root),
         "files": written,
         "error": None,
+        "mode": "incremental" if incremental else "greenfield",
     }
 
 

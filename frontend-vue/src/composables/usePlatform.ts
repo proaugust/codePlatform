@@ -620,7 +620,13 @@ async function onExecute() {
     applyElicitation(data.elicitation)
     if (data.generate) result.value = data.generate
     await refreshStatus()
-    pipelineNote.value = '代码已生成（未自动启动，请用右上角按钮）'
+    const smokeMsg =
+      data.smoke && typeof data.smoke === 'object' && data.smoke.message
+        ? String(data.smoke.message)
+        : ''
+    pipelineNote.value = smokeMsg
+      ? `代码已生成。${smokeMsg}`
+      : '代码已生成（未自动启动，请到「运行」页启动）'
     pushRunLog({
       kind: 'info',
       title: '生成完成',
@@ -628,13 +634,22 @@ async function onExecute() {
       detail: data.generate ? JSON.stringify(data.generate, null, 2) : undefined,
     })
   } catch (e) {
-    error.value = String(e)
-    pipelineNote.value = ''
-    pushRunLog({ kind: 'error', title: '执行生成失败', message: String(e) })
+    const msg = String(e)
+    error.value = msg
+    pipelineNote.value = `执行生成失败：${msg}`
+    pushRunLog({ kind: 'error', title: '执行生成失败', message: msg, detail: msg })
   } finally {
     executing.value = false
     generating.value = false
   }
+}
+
+/** 分析计划 + 执行生成（一键改代码） */
+async function onPlanAndExecute() {
+  if (!canPlan.value || busy.value) return
+  await onPlan()
+  if (error.value || !planReady.value) return
+  await onExecute()
 }
 
 async function onRestart(opts?: { withFrontend?: boolean }) {
@@ -1116,6 +1131,7 @@ export function usePlatform() {
     onConclude,
     onPlan,
     onExecute,
+    onPlanAndExecute,
     onRestart,
     onStartBackend,
     onStartFrontend,

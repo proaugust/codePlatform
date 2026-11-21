@@ -233,7 +233,7 @@ function onDelete(sessionId: string) {
 
   <div class="advanced settings-panel">
     <h2>高级：直接粘贴需求（跳过澄清）</h2>
-    <p class="muted">粘贴完整需求后生成文档，再回「聊天」或「代码」继续生成代码。</p>
+    <p class="muted">粘贴完整需求后生成文档，再回「分析」或「代码」继续生成代码。</p>
     <textarea v-model="advancedSpec" class="spec-area" spellcheck="false" />
     <div class="row">
       <button type="button" :disabled="analyzing || !advancedSpec.trim()" @click="onAnalyzeAdvanced">

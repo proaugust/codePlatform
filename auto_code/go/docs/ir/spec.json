@@ -1,0 +1,40 @@
+{
+  "lang": "go",
+  "raw_spec": "用 Go 标准库 net/http 实现图书管理 REST API（端口 8072），进程内内存存储，无需外部数据库。\n必须提供：\n- GET /health 与 GET / → {\"status\":\"ok\"}\n- GET /api/books （可选 keyword 查询）\n- GET /api/books/{id}\n- POST /api/books ，body: {\"title\",\"author\",\"isbn\",\"stock\"}，201\n- PATCH /api/books/{id}/stock ，body: {\"stock\"}\n- DELETE /api/books/{id}，204\n统一错误 JSON：code/message/path/timestamp；404 图书不存在；409 ISBN 重复。\nCORS 允许 http://localhost:5173/5174/5175 与 127.0.0.1 同端口。\n只要 go.mod（module example.com/autocode）与必要 .go 源码，禁止第三方 web 框架。",
+  "mode": "greenfield",
+  "goals": [
+    "提供图书增删改查与库存调整 REST API",
+    "提供健康检查与统一错误响应",
+    "支持本地前端跨域联调"
+  ],
+  "scope": "仅图书管理与探活接口，内存存储，无持久化、无鉴权、无分页",
+  "inputs": [
+    "HTTP 请求（路径、查询参数、JSON 请求体）",
+    "环境变量 PORT（可选）"
+  ],
+  "outputs": [
+    "JSON 响应（图书对象/列表/状态/错误）",
+    "HTTP 状态码 200/201/204/400/404/405/409/500"
+  ],
+  "constraints": [
+    "仅使用 Go 标准库 net/http，禁止第三方 Web 框架",
+    "监听端口 8072",
+    "CORS 白名单 localhost/127.0.0.1 的 5173/5174/5175",
+    "内存存储需并发安全",
+    "module 为 example.com/autocode"
+  ],
+  "assumptions": [
+    "ID 由服务端自增生成",
+    "ISBN 全局唯一",
+    "stock 为非负整数，PATCH 直接设置目标值",
+    "进程重启数据丢失"
+  ],
+  "acceptance": [
+    "GET /health 与 GET / 返回 200 且 body 为 {\"status\":\"ok\"}",
+    "POST /api/books 创建成功返回 201 且响应含自增 id；重复 ISBN 返回 409 且错误体含 code/message/path/timestamp",
+    "GET /api/books?keyword=xx 仅返回 title/author/isbn 匹配的图书",
+    "PATCH /api/books/{id}/stock 更新库存返回 200；不存在 id 返回 404",
+    "DELETE /api/books/{id} 成功返回 204，再次删除返回 404",
+    "来自 http://localhost:5173 的 OPTIONS 预检返回 204 且含正确 CORS 头"
+  ]
+}

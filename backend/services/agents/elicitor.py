@@ -246,6 +246,12 @@ def _chat_system(lang: str) -> str:
 
 def _conclude_system(lang: str) -> str:
     stack = "Java/Spring Boot" if lang == "java" else "Go net/http"
+    fe_rule = (
+        "- java 目标：接口变更（含 DELETE/POST/PATCH）默认须同步配套 Vue 前端操作；"
+        "禁止在 out_of_scope 写「不涉及前端」若用户提到前端/页面/选择删除等。\n"
+        if lang == "java"
+        else "- 除非用户明确只要后端，否则不要把前端写进 out_of_scope。\n"
+    )
     return (
         "你是需求澄清总结器。根据对话与历史摘要整理结构化结论，禁止输出代码。\n"
         f"目标栈：{stack}。\n"
@@ -262,6 +268,7 @@ def _conclude_system(lang: str) -> str:
         "- 最近一条用户原话优先级最高：summary/goals/scope 必须直接体现它（例如「增加删除图书接口」）。\n"
         "- 禁止用更早的滚动摘要覆盖/替换用户最新明确需求。\n"
         "- 若已有图书等业务工程，默认增量：补接口/前端操作，不要改成无关新系统。\n"
+        f"{fe_rule}"
         "- 信息不足时做合理假设并写入 open_questions；scope 至少 2 条；必须隐含可提供 GET /health。\n"
     )
 
@@ -302,6 +309,14 @@ def _parse_conclusion(obj: dict[str, Any]) -> dict[str, Any]:
         conclusion["summary"] = "（模型未给出摘要，请编辑后再次分析计划）"
     if len(conclusion["scope"]) < 1:
         conclusion["scope"] = ["提供基础 REST API 与 GET /health"]
+    # 范围已含前端时，去掉 out_of_scope 里的「不涉及前端」
+    scope_text = " ".join(conclusion["scope"]) + conclusion["summary"]
+    if any(k in scope_text for k in ("前端", "Vue", "页面")):
+        conclusion["out_of_scope"] = [
+            x
+            for x in conclusion["out_of_scope"]
+            if "不涉及前端" not in x and "不做前端" not in x and "不含前端" not in x
+        ]
     return conclusion
 
 

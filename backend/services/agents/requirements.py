@@ -54,6 +54,9 @@ def _system_prompt(lang: str) -> str:
         f"- {stack}\n"
         "- 从零生成：按基线约定设计，不要假设已有业务代码。\n"
         "- 不要输出工程结构正文。\n"
+        "- 若用户需求涉及前端操作/页面选择/删除按钮，或目标为 java 配套 Vue："
+        "requirements 范围必须含前端；禁止写「不涉及前端改动」。\n"
+        "- 用户硬需求中的接口（如 DELETE）必须出现在 api 文档中。\n"
     )
 
 
@@ -96,11 +99,28 @@ async def run_requirements(
     except ValueError as e:
         raise RequirementsError(str(e)) from e
 
+    def _scrub_frontend_contradiction(md: str) -> str:
+        """用户/场景需要前端时，去掉「不涉及前端」类自相矛盾句。"""
+        raw_l = (spec or "").lower()
+        needs_fe = lang == "java" or any(
+            k in (spec or "") for k in ("前端", "页面", "Vue", "选择删除", "按钮")
+        ) or "frontend" in raw_l
+        if not needs_fe:
+            return md
+        lines = []
+        for line in md.splitlines():
+            if "不涉及前端" in line or "不做前端" in line or "不含前端" in line:
+                continue
+            lines.append(line)
+        return "\n".join(lines)
+
     files: list[dict[str, str]] = []
     for key, filename, title in DOC_KEYS:
         content = data.get(key)
         if not isinstance(content, str) or not content.strip():
             raise RequirementsError(f"分析结果缺少字段: {key}（{title}）")
+        if key == "requirements":
+            content = _scrub_frontend_contradiction(content)
         path = out / filename
         body = content if content.endswith("\n") else content + "\n"
         path.write_text(body, encoding="utf-8", newline="\n")

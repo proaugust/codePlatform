@@ -36,7 +36,7 @@ def _system_prompt(lang: str, *, incremental: bool) -> str:
             "- 模式：incremental（在已有工程上迭代）。\n"
             "- 必须保留并扩展现有业务能力；禁止无故改成无关新系统。\n"
             "- 用户最新硬需求（如新增 DELETE 图书）必须出现在 apis 与 tasks 中。\n"
-            "- tasks 描述「修改/新增哪些文件」，不要假装从零脚手架。\n"
+            "- tasks 描述「修改/新增哪些文件」，不要假装从零脚手架；files 用真实相对路径。\n"
             "- 若需求是增量接口，tasks 可 2～6 个，须含对应前后端验收（若 java）。\n"
         )
     else:
@@ -45,6 +45,13 @@ def _system_prompt(lang: str, *, incremental: bool) -> str:
             "- 列出将新建的模块/API/表。\n"
             "- tasks 按依赖排序，至少 3 个任务。\n"
         )
+    fe_rules = (
+        "- java：凡 apis 含业务写操作（POST/PATCH/PUT/DELETE），必须另有任务修改 frontend/ "
+        "（如 frontend/src/api/client.ts、列表/详情 Vue），acceptance 含前端可点删除/提交。\n"
+        "- 禁止把「不涉及前端」写入 risks 来回避配套 Vue。\n"
+        if lang == "java"
+        else ""
+    )
     return (
         "你是技术方案与任务规划 Agent。根据需求 Spec、用户硬需求与代码库基线 IR，输出 JSON（不要 markdown 围栏）。\n"
         "Schema:\n"
@@ -67,6 +74,7 @@ def _system_prompt(lang: str, *, incremental: bool) -> str:
         "规则：\n"
         f"- 技术栈：{stack}\n"
         f"{mode_rules}"
+        f"{fe_rules}"
         "- apis 至少含 GET /health；用户点名的 method+path 必须原样出现在 apis。\n"
         "- 最后一任务须含可运行验收（含 GET /health）。\n"
         "- 字段用中文简述即可。\n"
@@ -141,15 +149,47 @@ async def run_planner(lang: str) -> dict[str, Any]:
     if not isinstance(data.get("tasks"), list) or not data["tasks"]:
         data = _fallback_plan(lang, spec, incremental=incremental)
 
+    tasks = data.get("tasks") if isinstance(data.get("tasks"), list) else []
+    apis = data.get("apis") if isinstance(data.get("apis"), list) else []
+    # java：接口有写操作但 tasks 未含 frontend/ 时补一条，避免只改后端
+    if lang == "java":
+        write_apis = [
+            a
+            for a in apis
+            if isinstance(a, dict) and str(a.get("method") or "").upper() in {"POST", "PUT", "PATCH", "DELETE"}
+        ]
+        has_fe_task = any(
+            isinstance(t, dict)
+            and any(str(f).replace("\\", "/").startswith("frontend/") for f in (t.get("files") or []))
+            for t in tasks
+        )
+        if write_apis and not has_fe_task:
+            tasks = list(tasks) + [
+                {
+                    "id": f"T{len(tasks) + 1}",
+                    "title": "配套 Vue 前端：暴露新增/变更接口操作",
+                    "deps": [str(tasks[-1].get("id") or "T1")] if tasks and isinstance(tasks[-1], dict) else [],
+                    "files": [
+                        "frontend/src/api/client.ts",
+                        "frontend/src/views/BookListView.vue",
+                        "frontend/src/views/BookDetailView.vue",
+                    ],
+                    "acceptance": [
+                        "前端可选择目标并调用对应写接口（含 DELETE 若存在）",
+                        "错误展示后端 code/message",
+                    ],
+                }
+            ]
+
     plan = {
         "lang": lang,
         "mode": mode,
         "approved": False,
         "summary": str(data.get("summary") or ""),
         "modules": data.get("modules") if isinstance(data.get("modules"), list) else [],
-        "apis": data.get("apis") if isinstance(data.get("apis"), list) else [],
+        "apis": apis,
         "data_model": data.get("data_model") if isinstance(data.get("data_model"), list) else [],
-        "tasks": data.get("tasks") if isinstance(data.get("tasks"), list) else [],
+        "tasks": tasks,
         "risks": data.get("risks") if isinstance(data.get("risks"), list) else [],
     }
     path = ir.write_change_plan(lang, plan)

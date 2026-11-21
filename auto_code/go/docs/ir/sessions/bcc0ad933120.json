@@ -1,0 +1,25 @@
+{
+  "session_id": "bcc0ad933120",
+  "lang": "go",
+  "status": "concluded",
+  "messages": [
+    {
+      "role": "user",
+      "content": "hi",
+      "at": "x"
+    }
+  ],
+  "conclusion": {
+    "summary": "s",
+    "goals": [],
+    "scope": [
+      "a"
+    ],
+    "out_of_scope": [],
+    "nfr": [],
+    "open_questions": []
+  },
+  "created_at": "2026-11-17T17:10:00.084474+00:00",
+  "updated_at": "2026-11-17T17:10:00.084484+00:00",
+  "confirmed_at": null
+}

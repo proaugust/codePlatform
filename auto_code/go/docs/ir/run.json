@@ -1,0 +1,12 @@
+{
+  "lang": "go",
+  "state": "DONE",
+  "updated_at": "2026-11-21T18:43:15.529667+00:00",
+  "error": null,
+  "created_at": "2026-11-21T18:35:46.839417+00:00",
+  "plan_approved": true,
+  "note": "auto_approved",
+  "repair_attempt": 0,
+  "validation_ok": true,
+  "frontend_ok": false
+}

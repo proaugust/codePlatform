@@ -1,0 +1,35 @@
+{
+  "lang": "go",
+  "mode": "greenfield",
+  "baseline": {
+    "stack": "Go standard library net/http only",
+    "module": "example.com/autocode",
+    "layers": [
+      "handler",
+      "service",
+      "repository"
+    ],
+    "conventions": [
+      "No third-party web frameworks",
+      "Always expose GET /health returning JSON {status:ok}",
+      "Enable CORS for Vite 5173/5174"
+    ],
+    "port": 8072,
+    "mode": "greenfield"
+  },
+  "scan": {
+    "lang": "go",
+    "root": "D:\\code\\py\\demo\\codePlatform\\auto_code\\go",
+    "has_code": false,
+    "build": {},
+    "jpa": {},
+    "layers": {
+      "handler": [],
+      "service": [],
+      "repository": []
+    },
+    "tree": [],
+    "apis": [],
+    "notes": []
+  }
+}

@@ -1,0 +1,166 @@
+{
+  "lang": "java",
+  "mode": "incremental",
+  "approved": true,
+  "summary": "在现有 Spring Boot 图书管理工程上做增量修复：消除启动/接口运行报错并补齐全局异常与日志，同时按用户硬需求新增 DELETE /api/books/{id} 删除图书接口（前端按 ID 选择删除），保留 GET /health 与既有图书接口契约。",
+  "modules": [
+    {
+      "name": "controller",
+      "responsibility": "对外 REST 入口：BookController 新增 DELETE /api/books/{id}，HealthController 提供 GET /health，保持既有 GET/POST/PATCH 契约不变"
+    },
+    {
+      "name": "service",
+      "responsibility": "BookService 增加 deleteBook(id)：先校验存在性，不存在抛 BusinessException(404, BOOK_NOT_FOUND)，存在则物理删除；关键分支打日志"
+    },
+    {
+      "name": "repository",
+      "responsibility": "BookRepository 复用 JpaRepository 的 findById/delete，无需新增自定义方法"
+    },
+    {
+      "name": "exception",
+      "responsibility": "GlobalExceptionHandler 统一处理 BusinessException/参数校验/未预期异常，输出 ErrorResponse；不泄露敏感信息"
+    },
+    {
+      "name": "config",
+      "responsibility": "application.yml 端口 8070、H2 内存库与 JPA 配置修正；CorsConfig 允许 Vite 5173/5174"
+    },
+    {
+      "name": "test",
+      "responsibility": "BookApiTest 覆盖删除成功 204、删除不存在 404、健康检查 200 及既有接口冒烟"
+    }
+  ],
+  "apis": [
+    {
+      "method": "GET",
+      "path": "/health",
+      "description": "轻量健康检查，返回 200 与 {\"status\":\"ok\"}，不依赖外部组件"
+    },
+    {
+      "method": "GET",
+      "path": "/api/books",
+      "description": "图书列表，返回 BookResponse[]"
+    },
+    {
+      "method": "GET",
+      "path": "/api/books/{id}",
+      "description": "按 ID 查询图书，不存在返回 404 BOOK_NOT_FOUND"
+    },
+    {
+      "method": "POST",
+      "path": "/api/books",
+      "description": "新增图书，201 返回 BookResponse；400 校验失败；409 ISBN 重复"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/books/{id}/stock",
+      "description": "更新库存，200 返回 BookResponse；400 参数非法；404 不存在"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/books/{id}",
+      "description": "用户硬需求：按 ID 删除指定图书（前端选择目标后调用），成功 204 无响应体；不存在 404 且 code=BOOK_NOT_FOUND；ID 非法 400"
+    }
+  ],
+  "data_model": [
+    {
+      "name": "book",
+      "fields": [
+        "id 主键自增",
+        "title 书名非空",
+        "author 作者非空",
+        "isbn 唯一非空",
+        "stock 库存非空且>=0",
+        "created_at 创建时间",
+        "updated_at 更新时间"
+      ]
+    },
+    {
+      "name": "ErrorResponse",
+      "fields": [
+        "code 错误码",
+        "message 错误描述",
+        "timestamp 时间戳"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "修复启动与运行报错基线（配置/依赖/Bean 装配）",
+      "deps": [],
+      "files": [
+        "pom.xml",
+        "src/main/resources/application.yml",
+        "src/main/java/com/example/autocode/AutoCodeApplication.java",
+        "src/main/java/com/example/autocode/config/CorsConfig.java"
+      ],
+      "acceptance": [
+        "mvn -q clean compile 通过，无依赖冲突",
+        "mvn spring-boot:run 启动成功，端口 8070 可访问，日志无未处理异常",
+        "H2 内存库与 JPA ddl-auto 配置生效，Book 表自动创建",
+        "CORS 允许 http://localhost:5173 与 5174"
+      ]
+    },
+    {
+      "id": "T2",
+      "title": "新增删除图书接口全链路（Controller-Service-Repository）",
+      "deps": [
+        "T1"
+      ],
+      "files": [
+        "src/main/java/com/example/autocode/controller/BookController.java",
+        "src/main/java/com/example/autocode/service/BookService.java",
+        "src/main/java/com/example/autocode/repository/BookRepository.java"
+      ],
+      "acceptance": [
+        "DELETE /api/books/{id} 对已存在图书返回 204 且无响应体",
+        "删除后 GET /api/books/{id} 返回 404",
+        "对不存在 ID 返回 404 且响应体 code=BOOK_NOT_FOUND",
+        "Service 删除前做存在性校验并记录含 id 的关键日志，不输出敏感信息",
+        "既有 GET/POST/PATCH 接口行为与契约不变"
+      ]
+    },
+    {
+      "id": "T3",
+      "title": "统一异常处理与错误响应完善",
+      "deps": [
+        "T2"
+      ],
+      "files": [
+        "src/main/java/com/example/autocode/exception/GlobalExceptionHandler.java",
+        "src/main/java/com/example/autocode/exception/BusinessException.java",
+        "src/main/java/com/example/autocode/exception/ErrorResponse.java"
+      ],
+      "acceptance": [
+        "BusinessException 映射到对应 HTTP 状态码与 code（BOOK_NOT_FOUND/ISBN_DUPLICATED）",
+        "MethodArgumentNotValidException 与路径参数类型错误返回 400 VALIDATION_ERROR",
+        "未预期异常返回 500 INTERNAL_ERROR，日志记录异常链但不含密钥/密码",
+        "错误响应结构统一为 {code,message,timestamp}"
+      ]
+    },
+    {
+      "id": "T4",
+      "title": "健康检查与回归测试补齐",
+      "deps": [
+        "T3"
+      ],
+      "files": [
+        "src/main/java/com/example/autocode/controller/HealthController.java",
+        "src/test/java/com/example/autocode/BookApiTest.java"
+      ],
+      "acceptance": [
+        "GET /health 返回 200 且响应体为 {\"status\":\"ok\"}",
+        "BookApiTest 覆盖：创建→查询→改库存→删除 204→再查 404，以及删除不存在 404",
+        "mvn test 全部通过",
+        "mvn spring-boot:run 启动后 curl http://localhost:8070/health 返回 {\"status\":\"ok\"}，且 DELETE /api/books/{id} 冒烟通过"
+      ]
+    }
+  ],
+  "risks": [
+    "用户未提供异常堆栈，报错根因可能不在已假设的启动/接口路径，需以日志与 /health 复现闭环持续定位",
+    "删除为物理删除，误删不可恢复，前端需二次确认；如需软删除需另行确认",
+    "若既有接口契约与报错根因冲突，仅做最小必要调整并记录变更点",
+    "H2 内存库重启数据丢失，回归验证需在同一进程内完成",
+    "路径参数 id 非数字时需确保返回 400 而非 500"
+  ]
+}
