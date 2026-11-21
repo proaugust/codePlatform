@@ -16,8 +16,8 @@ from backend.services.llm import LlmError, chat_completion_json
 
 logger = logging.getLogger(__name__)
 
-# 仅 java 产物配套 Vue；Agent 控制台占 5173/5174
-FRONTEND_LANGS = frozenset({"java"})
+# java/go 产物均可配套 Vue；Agent 控制台占 5173/5174，业务前端共用 5175
+FRONTEND_LANGS = frozenset({"java", "go"})
 FRONTEND_PORT = 5175
 FRONTEND_DIR = "frontend"
 RUN_BAT_NAME = "run_frontend.bat"
@@ -337,7 +337,7 @@ def start_frontend_dev(lang: str, *, capture_log: bool = True) -> dict[str, Any]
     """启动业务 Vue；默认把输出写入 auto_code/{lang}/logs/frontend.log 供页面展示。"""
     lang = lang.lower().strip()
     if lang not in FRONTEND_LANGS:
-        raise FrontendCodegenError(f"当前仅支持启动 java 业务前端，收到: {lang}")
+        raise FrontendCodegenError(f"不支持启动业务前端的语言: {lang}（可选: java, go）")
 
     root = frontend_root(lang)
     bat = root / RUN_BAT_NAME
@@ -448,7 +448,7 @@ async def generate_frontend(
             "ok": False,
             "skipped": True,
             "lang": lang,
-            "error": f"当前仅支持为 java 生成 Vue 前端，跳过: {lang}",
+            "error": f"不支持为 {lang} 生成 Vue 前端，跳过",
             "files": [],
         }
 

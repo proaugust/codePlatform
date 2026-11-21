@@ -1,36 +1,28 @@
 {
   "lang": "go",
-  "mode": "greenfield",
+  "mode": "incremental",
   "approved": true,
-  "summary": "用 Go 标准库 net/http 从零实现端口 8072 的图书管理 REST API，内存并发安全存储，覆盖探活、图书增删查、库存 PATCH、统一错误 JSON 与 5173/5174/5175 的 CORS 预检。",
+  "summary": "在现有 Go net/http 图书服务上增量完善「前端可选择图书并调用后端删除」能力：确保 DELETE /api/books/{id} 可用、前端静态页面支持选择与删除并刷新列表、后端同端口 8080 托管静态页面，保留 GET /health。",
   "modules": [
     {
-      "name": "main",
-      "responsibility": "程序入口：初始化仓储/服务/处理器，注册路由，读取 PORT（默认 8072）并启动 http.Server"
+      "name": "main.go 路由与静态托管",
+      "responsibility": "注册 GET /health、图书 CRUD 路由与 DELETE /api/books/{id}，CORS 中间件，/ 托管 static 静态页面，默认监听 8080（PORT 可覆盖）"
     },
     {
-      "name": "model",
-      "responsibility": "Book 实体与创建/库存请求 DTO、错误响应结构定义"
+      "name": "handler 层",
+      "responsibility": "解析路径参数 id、校验整数、调用 service 删除、统一 JSON 成功/错误响应与状态码映射"
     },
     {
-      "name": "repository",
-      "responsibility": "基于 map + sync.RWMutex 的内存存储，维护 id 自增、ISBN 唯一索引与关键字过滤"
+      "name": "service 层",
+      "responsibility": "图书业务逻辑，含 DeleteBook(id) 存在性校验与删除，ID 生成"
     },
     {
-      "name": "service",
-      "responsibility": "业务规则：字段校验、ISBN 唯一性、库存非负、ID 生成与时间戳维护"
+      "name": "repository 层",
+      "responsibility": "内存存储 map/slice + sync.RWMutex，删除加写锁保证并发安全"
     },
     {
-      "name": "handler",
-      "responsibility": "路由分发与请求解析、路径参数解析、状态码与 JSON 序列化"
-    },
-    {
-      "name": "middleware",
-      "responsibility": "CORS 白名单与 OPTIONS 预检、panic 恢复、请求体大小限制、统一错误输出"
-    },
-    {
-      "name": "errors",
-      "responsibility": "业务错误类型与错误码常量（BAD_REQUEST/BOOK_NOT_FOUND/ISBN_CONFLICT/METHOD_NOT_ALLOWED/INTERNAL_ERROR）"
+      "name": "static 前端页面",
+      "responsibility": "index.html/app.js/style.css 展示图书列表、单选选择、删除按钮与二次确认，调用 DELETE 后刷新列表"
     }
   ],
   "apis": [
@@ -41,116 +33,97 @@
     },
     {
       "method": "GET",
-      "path": "/",
-      "description": "根路径探活，返回 200 与 {\"status\":\"ok\"}"
-    },
-    {
-      "method": "GET",
       "path": "/api/books",
-      "description": "图书列表，可选 keyword 对 title/author/isbn 忽略大小写模糊匹配，无数据返回 []"
-    },
-    {
-      "method": "GET",
-      "path": "/api/books/{id}",
-      "description": "按 id 查询单本图书，id 非法 400，不存在 404"
+      "description": "图书列表，返回 JSON 数组"
     },
     {
       "method": "POST",
       "path": "/api/books",
-      "description": "创建图书，body {title,author,isbn,stock}，成功 201 返回含自增 id 的对象，ISBN 重复 409"
+      "description": "新增图书，请求 title/author/stock，返回 201 与图书对象"
     },
     {
-      "method": "PATCH",
-      "path": "/api/books/{id}/stock",
-      "description": "直接设置库存目标值，body {stock}，成功 200 返回更新后对象，不存在 404"
+      "method": "GET",
+      "path": "/api/books/{id}",
+      "description": "图书详情，不存在返回 404 NOT_FOUND"
     },
     {
       "method": "DELETE",
       "path": "/api/books/{id}",
-      "description": "删除图书，成功 204 无响应体，再次删除 404"
+      "description": "按整数 ID 删除图书，成功返回 200 {\"deleted\":true,\"id\":N}；ID 非法 400 INVALID_ID；不存在 404 NOT_FOUND"
     },
     {
-      "method": "OPTIONS",
-      "path": "/api/books",
-      "description": "CORS 预检，白名单 Origin 返回 204 与允许方法/头"
+      "method": "PATCH",
+      "path": "/api/books/{id}/stock",
+      "description": "库存调整，请求 delta，返回更新后的图书对象"
+    },
+    {
+      "method": "GET",
+      "path": "/",
+      "description": "托管静态页面 index.html，前端通过 fetch 调用上述 API"
     }
   ],
   "data_model": [
     {
-      "name": "books（内存表）",
+      "name": "books（内存存储）",
       "fields": [
-        "id：int64 自增主键",
-        "title：string 非空",
-        "author：string 非空",
-        "isbn：string 非空且全局唯一",
-        "stock：int 非负",
-        "created_at：time.Time 创建时间",
-        "updated_at：time.Time 更新时间"
-      ]
-    },
-    {
-      "name": "ErrorResponse",
-      "fields": [
-        "code：错误码字符串",
-        "message：错误描述",
-        "path：请求路径",
-        "timestamp：RFC3339 时间"
+        "id int 自增主键",
+        "title string 非空",
+        "author string 非空",
+        "stock int >=0",
+        "created_at time.Time"
       ]
     }
   ],
   "tasks": [
     {
       "id": "T1",
-      "title": "初始化 Go module 与实体/错误定义",
+      "title": "核对并完善 repository/service 删除逻辑",
       "deps": [],
       "files": [
-        "go.mod",
-        "model.go",
-        "errors.go"
+        "main.go"
       ],
       "acceptance": [
-        "go.mod 声明 module example.com/autocode 且无第三方依赖",
-        "go build ./... 通过",
-        "Book 含 id/title/author/isbn/stock/createdAt/updatedAt 字段，ErrorResponse 含 code/message/path/timestamp"
+        "DeleteBook(id) 在写锁内删除，存在返回 nil，不存在返回未找到错误",
+        "并发删除/读取无数据竞争（go test -race 或 go vet 通过）",
+        "ID 自增计数器在写锁内递增，删除后不复用"
       ]
     },
     {
       "id": "T2",
-      "title": "实现内存仓储与业务服务",
+      "title": "完善 DELETE /api/books/{id} handler 与统一错误响应",
       "deps": [
         "T1"
       ],
       "files": [
-        "repository.go",
-        "service.go"
+        "main.go"
       ],
       "acceptance": [
-        "仓储使用 sync.RWMutex 保护 map[int64]*Book 与 isbn 索引，并发读写无数据竞争（go test -race 或 go vet 通过）",
-        "创建时 id 自增、ISBN 重复返回 ISBN_CONFLICT 错误",
-        "keyword 过滤对 title/author/isbn 忽略大小写匹配",
-        "库存 PATCH 拒绝负数并返回 BAD_REQUEST"
+        "DELETE /api/books/{id} 删除已存在图书返回 200 且 body 含 deleted=true 与 id",
+        "再次 GET /api/books/{id} 返回 404",
+        "不存在 ID 返回 404 且错误结构含 code=NOT_FOUND",
+        "非整数 ID 返回 400 且 code=INVALID_ID"
       ]
     },
     {
       "id": "T3",
-      "title": "实现 HTTP 处理器、CORS 与统一错误中间件",
+      "title": "前端静态页面支持选择与删除",
       "deps": [
         "T2"
       ],
       "files": [
-        "handler.go",
-        "middleware.go"
+        "static/index.html",
+        "static/app.js",
+        "static/style.css"
       ],
       "acceptance": [
-        "注册 GET /health、GET /、GET /api/books、GET /api/books/{id}、POST /api/books、PATCH /api/books/{id}/stock、DELETE /api/books/{id}",
-        "错误响应统一为 code/message/path/timestamp 且 Content-Type 为 application/json; charset=utf-8",
-        "白名单 Origin（localhost/127.0.0.1 的 5173/5174/5175）OPTIONS 预检返回 204 且含 Access-Control-Allow-Origin/Methods/Headers",
-        "请求体超过 1MB 或 JSON 非法返回 400"
+        "页面加载后展示图书列表，每行可选中（单选）",
+        "点击删除弹出二次确认，确认后调用 DELETE /api/books/{id}",
+        "删除成功后列表刷新且该图书消失，失败时展示错误提示"
       ]
     },
     {
       "id": "T4",
-      "title": "实现 main 入口并完成端到端可运行验收",
+      "title": "静态托管与端口/CORS 收口并整体验收",
       "deps": [
         "T3"
       ],
@@ -158,19 +131,17 @@
         "main.go"
       ],
       "acceptance": [
-        "go build -o bookapi . 成功，启动后日志输出监听地址 :8072",
-        "curl http://localhost:8072/health 与 curl http://localhost:8072/ 均返回 200 且 body 为 {\"status\":\"ok\"}",
-        "POST /api/books 返回 201 含自增 id，重复 ISBN 返回 409 且错误体含 code/message/path/timestamp",
-        "GET /api/books?keyword=xx 仅返回匹配图书；PATCH 库存返回 200，不存在 id 返回 404；DELETE 返回 204，再次删除返回 404",
-        "curl -X OPTIONS -H 'Origin: http://localhost:5173' http://localhost:8072/api/books 返回 204 且含正确 CORS 头"
+        "GET / 返回 index.html，静态资源与 API 同端口提供",
+        "默认监听 8080，PORT 环境变量可覆盖",
+        "CORS 允许 http://localhost:5173 与 http://localhost:5174",
+        "启动后 GET /health 返回 200 且 body 为 {\"status\":\"ok\"}；访问 http://localhost:8080/ 可完成选择删除全流程"
       ]
     }
   ],
   "risks": [
-    "路由依赖 Go 1.22+ ServeMux 方法+路径参数模式，低版本需手动解析路径",
-    "内存数据进程重启即丢失，属预期但需在文档说明",
-    "CORS 仅白名单指定 Origin，其他来源不带 CORS 头可能被前端拦截",
-    "PATCH 语义为直接设置库存而非增量，前端易误解",
-    "并发下 ISBN 唯一性依赖写锁内校验，需避免检查与写入分离"
+    "基线约定端口 8072 与需求 8080 不一致，需以 8080 为默认并保留 PORT 覆盖，文档需同步说明",
+    "现有 main.go 已含 DELETE 路由，需确认其实现是否满足 404/400 语义，避免重复注册路由",
+    "前端删除后整页刷新与局部移除需统一为一种交互，避免状态不一致",
+    "内存存储重启后数据丢失，属预期范围外"
   ]
 }

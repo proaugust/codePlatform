@@ -1,32 +1,25 @@
-# 架构设计
+# 架构
 
-## 分层结构
-采用经典三层结构，全部位于 `auto_code/go` 根目录下的包内：
+## 分层
+- **Handler 层**：`net/http` 路由与请求解析、参数校验、JSON 响应封装。
+- **Service 层**：图书业务逻辑（新增、查询、删除、库存调整），负责 ID 生成与存在性校验。
+- **Repository 层**：内存存储，使用 `sync.RWMutex` 保证并发安全。
+- **静态资源层**：`/` 托管前端页面（HTML/CSS/JS），与 API 同端口。
 
-- **Handler 层**：HTTP 路由注册、请求解析、参数校验、响应序列化、CORS 与错误中间件。
-- **Service 层**：业务规则（ISBN 唯一性校验、库存非负校验、ID 生成、关键字过滤）。
-- **Repository 层**：内存存储实现，使用 `sync.RWMutex` + `map[int64]*Book` 保证并发安全。
-
-## 模块划分
-- `main.go`：程序入口，初始化依赖、注册路由、启动 `http.Server`（端口 8072）。
-- `model.go`：`Book` 实体与请求/响应 DTO 定义。
-- `repository.go`：内存仓储接口与实现。
-- `service.go`：业务服务。
-- `handler.go`：HTTP 处理器与路由分发。
-- `middleware.go`：CORS、统一错误响应、panic 恢复。
-- `errors.go`：业务错误类型与错误码常量。
+## 模块
+- `main.go`：服务启动、路由注册、CORS 中间件、静态文件服务。
+- `handler`：`GET /health`、`GET /api/books`、`POST /api/books`、`GET /api/books/{id}`、`DELETE /api/books/{id}`、`PATCH /api/books/{id}/stock`。
+- `service`：图书业务方法，含 `DeleteBook(id int) error`。
+- `repository`：内存 `map[int]Book` 或切片 + 锁。
+- `static/`：`index.html`、`app.js`、`style.css`。
 
 ## 技术选型
-- 语言：Go（建议 1.21+，使用标准库 `net/http`、`encoding/json`、`sync`、`strconv`、`strings`、`time`）。
-- 路由：`http.ServeMux`（Go 1.22+ 支持方法+路径参数模式，如 `GET /api/books/{id}`）；若使用较低版本则手动解析路径。
-- 存储：进程内 `map` + 读写锁。
-- 无第三方依赖。
+- 语言：Go 1.22（`go.mod` module `example.com/autocode`）。
+- Web：标准库 `net/http`，使用 Go 1.22 路由模式（`GET /api/books/{id}`）。
+- 存储：进程内内存，无外部依赖。
+- 前端：原生 HTML + JavaScript（fetch API），无构建步骤。
 
 ## 部署
-- 单二进制部署，`go build -o bookapi .` 后运行，默认监听 `:8072`。
-- 可通过环境变量 `PORT` 覆盖端口（默认 8072）。
-
-## 关键设计
-- 统一错误结构体 `ErrorResponse{Code, Message, Path, Timestamp}`。
-- CORS 中间件对白名单 Origin 回写 `Access-Control-Allow-Origin`，处理 `OPTIONS` 预检返回 204。
-- 请求体使用 `http.MaxBytesReader` 限制大小。
+- 单进程部署，监听 `:8080`（可通过环境变量 `PORT` 覆盖，默认 8080）。
+- 静态页面与 API 同源，访问 `http://localhost:8080/`。
+- 健康检查 `GET /health` 用于探活。

@@ -81,8 +81,8 @@ from backend.services.runtime import (
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
-# 当前仅 Java 产物带配套 Vue 前端
-_LANGS_WITH_FRONTEND = frozenset({"java"})
+# java / go 产物均可配套 Vue 前端
+_LANGS_WITH_FRONTEND = frozenset({"java", "go"})
 
 
 class AnalyzeBody(BaseModel):

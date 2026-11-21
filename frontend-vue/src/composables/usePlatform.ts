@@ -70,7 +70,7 @@ export type LangMeta = {
 const TARGET_KEY = 'platform_target'
 const FALLBACK_LANGS: LangMeta[] = [
   { lang: 'java', backend_port: 8070, frontend_port: 5175, has_frontend: true },
-  { lang: 'go', backend_port: 8072, frontend_port: null, has_frontend: false },
+  { lang: 'go', backend_port: 8072, frontend_port: 5175, has_frontend: true },
 ]
 
 const target = ref<Lang>('java')

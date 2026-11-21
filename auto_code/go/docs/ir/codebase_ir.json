@@ -20,16 +20,100 @@
   "scan": {
     "lang": "go",
     "root": "D:\\code\\py\\demo\\codePlatform\\auto_code\\go",
-    "has_code": false,
-    "build": {},
+    "has_code": true,
+    "build": {
+      "go_mod": {
+        "path": "go.mod",
+        "module": "example.com/autocode",
+        "go": "1.22"
+      }
+    },
     "jpa": {},
     "layers": {
       "handler": [],
       "service": [],
       "repository": []
     },
-    "tree": [],
-    "apis": [],
+    "tree": [
+      "main.go"
+    ],
+    "apis": [
+      {
+        "method": "*",
+        "path": "GET /health",
+        "source": "main.go"
+      },
+      {
+        "method": "*",
+        "path": "GET /{$}",
+        "source": "main.go"
+      },
+      {
+        "method": "*",
+        "path": "GET /api/books",
+        "source": "main.go"
+      },
+      {
+        "method": "*",
+        "path": "POST /api/books",
+        "source": "main.go"
+      },
+      {
+        "method": "*",
+        "path": "GET /api/books/{id}",
+        "source": "main.go"
+      },
+      {
+        "method": "*",
+        "path": "DELETE /api/books/{id}",
+        "source": "main.go"
+      },
+      {
+        "method": "*",
+        "path": "PATCH /api/books/{id}/stock",
+        "source": "main.go"
+      },
+      {
+        "method": "*",
+        "path": "/",
+        "source": "main.go"
+      },
+      {
+        "method": "GET",
+        "path": "/health",
+        "source": "main.go"
+      },
+      {
+        "method": "GET",
+        "path": "/{$}",
+        "source": "main.go"
+      },
+      {
+        "method": "GET",
+        "path": "/api/books",
+        "source": "main.go"
+      },
+      {
+        "method": "POST",
+        "path": "/api/books",
+        "source": "main.go"
+      },
+      {
+        "method": "GET",
+        "path": "/api/books/{id}",
+        "source": "main.go"
+      },
+      {
+        "method": "DELETE",
+        "path": "/api/books/{id}",
+        "source": "main.go"
+      },
+      {
+        "method": "PATCH",
+        "path": "/api/books/{id}/stock",
+        "source": "main.go"
+      }
+    ],
     "notes": []
   }
 }

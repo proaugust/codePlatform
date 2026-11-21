@@ -500,6 +500,21 @@ def restart_project(lang: str, *, with_frontend: bool = True) -> dict[str, Any]:
                 ),
             }
         )
+        if with_frontend:
+            fe = frontend_root(lang)
+            if fe.is_dir() and any(fe.iterdir()):
+                fe_killed = kill_port(FRONTEND_PORT)
+                try:
+                    frontend = start_frontend_dev(lang, capture_log=True)
+                    frontend["killed"] = fe_killed
+                except FrontendCodegenError as e:
+                    frontend = {
+                        "ok": False,
+                        "started": False,
+                        "killed": fe_killed,
+                        "error": str(e),
+                        "message": str(e),
+                    }
     else:
         raise ProjectRuntimeError(f"不支持的 target: {lang}")
 
