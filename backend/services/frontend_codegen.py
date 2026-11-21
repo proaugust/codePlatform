@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, IO
 
 from backend.core.config import LANG_PORTS, settings
 from backend.services.analyze import AnalyzeError, load_docs_as_spec
@@ -76,8 +78,37 @@ def _safe_rel_path(raw: str) -> Path:
 
 
 def _clear_frontend(root: Path) -> None:
-    if root.exists():
-        shutil.rmtree(root)
+    """清空前端目录；先停占端口进程，避免 Windows 锁住 node_modules/esbuild。"""
+    from backend.services.runtime import kill_port
+
+    kill_port(FRONTEND_PORT)
+    if not root.exists():
+        root.mkdir(parents=True, exist_ok=True)
+        return
+
+    last_err: OSError | None = None
+    for i in range(5):
+        try:
+            shutil.rmtree(root)
+            last_err = None
+            break
+        except OSError as e:
+            last_err = e
+            # 再杀一次端口，给句柄释放时间
+            kill_port(FRONTEND_PORT)
+            time.sleep(0.5 * (i + 1))
+            # 尝试先挪走被锁的 node_modules
+            nm = root / "node_modules"
+            if nm.is_dir():
+                trash = root.parent / f".frontend_nm_trash_{int(time.time())}_{i}"
+                try:
+                    nm.rename(trash)
+                except OSError:
+                    pass
+    if last_err is not None and root.exists():
+        raise FrontendCodegenError(
+            f"无法清空前端目录（请先在「运行」页停止前端后再执行生成）: {last_err}"
+        ) from last_err
     root.mkdir(parents=True, exist_ok=True)
 
 
@@ -151,6 +182,98 @@ def frontend_url(port: int | None = None) -> str:
     return f"http://127.0.0.1:{port or FRONTEND_PORT}"
 
 
+def _vite_bin(root: Path) -> Path | None:
+    if sys.platform.startswith("win"):
+        cmd = root / "node_modules" / ".bin" / "vite.cmd"
+    else:
+        cmd = root / "node_modules" / ".bin" / "vite"
+    return cmd if cmd.is_file() else None
+
+
+def _append_frontend_log(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+        if not text.endswith("\n"):
+            f.write("\n")
+
+
+def _ensure_frontend_deps(root: Path, log_file: Path) -> None:
+    """node_modules/.bin/vite 缺失时自动 npm install（常见于残缺安装）。"""
+    if _vite_bin(root) is not None:
+        return
+    npm = "npm.cmd" if sys.platform.startswith("win") else "npm"
+    _append_frontend_log(log_file, f"\n===== deps: {npm} install（缺少 vite 可执行文件） =====\n")
+    handle = log_file.open("a", encoding="utf-8", newline="\n")
+    try:
+        kwargs: dict[str, Any] = {
+            "cwd": str(root),
+            "stdout": handle,
+            "stderr": subprocess.STDOUT,
+            "stdin": subprocess.DEVNULL,
+        }
+        if sys.platform.startswith("win"):
+            kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        proc = subprocess.run([npm, "install"], **kwargs, timeout=300)
+    except subprocess.TimeoutExpired as e:
+        raise FrontendCodegenError("npm install 超时（300s），请到 frontend 目录手动安装依赖") from e
+    finally:
+        handle.close()
+    if proc.returncode != 0:
+        raise FrontendCodegenError(
+            f"npm install 失败（exit={proc.returncode}），请查看 frontend 日志"
+        )
+    if _vite_bin(root) is None:
+        raise FrontendCodegenError(
+            "npm install 后仍缺少 node_modules/.bin/vite，请到 frontend 目录手动 npm install"
+        )
+    _append_frontend_log(log_file, "===== deps: npm install ok =====\n")
+
+
+def _tail_log_text(path: Path, *, max_chars: int = 2500) -> str:
+    if not path.is_file():
+        return ""
+    raw = path.read_bytes()
+    chunk = raw[-max_chars:] if len(raw) > max_chars else raw
+    for enc in ("utf-8", "gbk", "cp936"):
+        try:
+            return chunk.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return chunk.decode("utf-8", errors="replace")
+
+
+def _wait_frontend_ready(
+    proc: subprocess.Popen[Any],
+    *,
+    port: int,
+    log_file: Path,
+    timeout_s: float = 25.0,
+) -> tuple[bool, str]:
+    """等待端口就绪或进程退出；失败时带上日志尾部。"""
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if _port_open("127.0.0.1", port):
+            return True, f"业务前端已监听 http://127.0.0.1:{port}"
+        code = proc.poll()
+        if code is not None:
+            tail = _tail_log_text(log_file).strip()
+            detail = f"\n---- log ----\n{tail}" if tail else ""
+            return False, f"Vue 前端进程已退出（exit={code}）{detail}"
+        time.sleep(0.35)
+    if _port_open("127.0.0.1", port):
+        return True, f"业务前端已监听 http://127.0.0.1:{port}"
+    code = proc.poll()
+    if code is not None:
+        tail = _tail_log_text(log_file).strip()
+        detail = f"\n---- log ----\n{tail}" if tail else ""
+        return False, f"Vue 前端进程已退出（exit={code}）{detail}"
+    return (
+        False,
+        f"启动超时（{int(timeout_s)}s）仍未监听 :{port}，请查看 frontend 日志",
+    )
+
+
 def start_frontend_dev(lang: str, *, capture_log: bool = True) -> dict[str, Any]:
     """启动业务 Vue；默认把输出写入 auto_code/{lang}/logs/frontend.log 供页面展示。"""
     lang = lang.lower().strip()
@@ -181,28 +304,39 @@ def start_frontend_dev(lang: str, *, capture_log: bool = True) -> dict[str, Any]
             "message": f"业务前端已在运行，可直接打开 {url}",
         }
 
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        _ensure_frontend_deps(root, log_file)
+    except FrontendCodegenError:
+        raise
+
     # Windows CreateProcess 找不到无扩展名的 npm，必须用 npm.cmd
     npm = "npm.cmd" if sys.platform.startswith("win") else "npm"
     cmd = [npm, "run", "dev", "--", "--host", "127.0.0.1", "--port", str(FRONTEND_PORT)]
     if capture_log:
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        with log_file.open("a", encoding="utf-8", newline="\n") as header:
-            header.write(f"\n===== START {' '.join(cmd)} =====\n")
-        handle = log_file.open("a", encoding="utf-8", newline="\n")
+        _append_frontend_log(log_file, f"\n===== START {' '.join(cmd)} =====\n")
+        # 二进制追加：兼容 npm/cmd 的系统编码输出，避免中文错误被 utf-8 读丢
+        handle: IO[bytes] = log_file.open("ab")
+        env = os.environ.copy()
+        env.setdefault("FORCE_COLOR", "0")
         kwargs: dict[str, Any] = {
             "cwd": str(root),
             "stdout": handle,
             "stderr": subprocess.STDOUT,
             "stdin": subprocess.DEVNULL,
+            "env": env,
         }
         if sys.platform.startswith("win"):
             kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
         else:
             kwargs["start_new_session"] = True
         proc = subprocess.Popen(cmd, **kwargs)
-        msg = f"已后台启动 Vue（pid={proc.pid}），日志见页面控制台；{url}"
+        ok, msg = _wait_frontend_ready(proc, port=FRONTEND_PORT, log_file=log_file)
+        listening = _port_open("127.0.0.1", FRONTEND_PORT)
+        if not ok:
+            _append_frontend_log(log_file, f"===== START FAILED =====\n{msg}\n")
         return {
-            "ok": True,
+            "ok": ok,
             "started": True,
             "already_running": False,
             "lang": lang,
@@ -211,8 +345,8 @@ def start_frontend_dev(lang: str, *, capture_log: bool = True) -> dict[str, Any]
             "bat": str(bat),
             "log": str(log_file),
             "pid": proc.pid,
-            "listening": _port_open("127.0.0.1", FRONTEND_PORT),
-            "message": msg,
+            "listening": listening,
+            "message": msg if ok else f"前端启动失败：{msg}",
         }
 
     if sys.platform.startswith("win"):

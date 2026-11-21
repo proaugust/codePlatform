@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from backend.core.config import BASE_DIR, settings
 from backend.routers import all_routers
+from backend.services.platform_prefs import resolve_llm_config
 
 STATIC_DIR = BASE_DIR / "static"
 SERVE_STATIC = settings.serve_static and STATIC_DIR.is_dir()
@@ -36,8 +37,8 @@ logger = logging.getLogger(__name__)
 
 _auto_code_dirs = settings.ensure_auto_code_dirs()
 logger.info("生成代码目录: %s", ", ".join(str(p) for p in _auto_code_dirs))
-if not settings.llm_api_key.strip():
-    logger.warning("未配置 LLM_API_KEY / OPENAI_API_KEY，/generate 将无法调用 LLM")
+if not resolve_llm_config()["llm_api_key"]:
+    logger.warning("未配置 LLM API Key（设置页或 .env），/generate 将无法调用 LLM")
 
 
 def _register_api_routes(app: FastAPI, *, prefix: str = "") -> None:

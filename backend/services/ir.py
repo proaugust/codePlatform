@@ -155,14 +155,28 @@ def list_sessions(lang: str) -> list[dict[str, Any]]:
         if not data:
             continue
         conclusion = data.get("conclusion") if isinstance(data.get("conclusion"), dict) else {}
+        rolling = str(data.get("rolling_summary") or "").strip()
+        summary = rolling or str((conclusion or {}).get("summary") or "").strip()
         items.append(
             {
                 "session_id": data.get("session_id") or path.stem,
                 "status": data.get("status"),
                 "updated_at": data.get("updated_at"),
                 "confirmed_at": data.get("confirmed_at"),
-                "summary": (conclusion or {}).get("summary") or "",
+                "summary": summary[:200],
                 "message_count": len(data.get("messages") or []),
+                "plan_ready": bool(data.get("plan_ready")),
             }
         )
     return items
+
+
+def delete_session(lang: str, session_id: str) -> bool:
+    safe = "".join(c for c in session_id if c.isalnum() or c in "-_")
+    if not safe:
+        return False
+    path = sessions_dir(lang) / f"{safe}.json"
+    if not path.is_file():
+        return False
+    path.unlink()
+    return True

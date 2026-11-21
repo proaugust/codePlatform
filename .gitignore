@@ -45,3 +45,6 @@ auto_code/java/**
 auto_code/go/**
 !auto_code/java/.gitkeep
 !auto_code/go/.gitkeep
+
+# Platform prefs (may contain LLM API key)
+auto_code/.platform_prefs.json

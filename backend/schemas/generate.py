@@ -97,6 +97,7 @@ class ElicitMessage(BaseModel):
     role: str
     content: str
     at: str | None = None
+    mode: str | None = None
 
 
 class ElicitConclusion(BaseModel):
@@ -108,15 +109,25 @@ class ElicitConclusion(BaseModel):
     open_questions: list[str] = Field(default_factory=list)
 
 
+class ElicitLastPlan(BaseModel):
+    summary: str = ""
+    task_count: int = 0
+    at: str | None = None
+
+
 class ElicitationState(BaseModel):
     session_id: str
     lang: str
     status: str
     messages: list[ElicitMessage] = Field(default_factory=list)
     conclusion: ElicitConclusion | None = None
+    rolling_summary: str = ""
+    plan_ready: bool = False
+    last_plan: ElicitLastPlan | None = None
     created_at: str | None = None
     updated_at: str | None = None
     confirmed_at: str | None = None
+    closed_at: str | None = None
 
 
 class ElicitMessageBody(BaseModel):
@@ -135,6 +146,18 @@ class ElicitConfirmBody(BaseModel):
     )
 
 
+class ElicitPlanBody(BaseModel):
+    target: str = Field(..., description="生成目标：java | go")
+    content: str | None = Field(default=None, description="可选：一并写入的用户说明")
+    conclusion: ElicitConclusion | None = Field(
+        default=None, description="可选：前端编辑后的结论"
+    )
+
+
+class ElicitExecuteBody(BaseModel):
+    target: str = Field(..., description="生成目标：java | go")
+
+
 class ElicitRestoreBody(BaseModel):
     target: str = Field(..., description="生成目标：java | go")
 
@@ -143,8 +166,10 @@ class ElicitMessageResponse(BaseModel):
     elicitation: ElicitationState
     reply: str
     ready_to_conclude: bool = False
+    ready_to_plan: bool = False
     user_turns: int = 0
-    max_turns: int = 12
+    max_turns: int = 20
+    session_closed: bool = False
 
 
 class ElicitStateResponse(BaseModel):
@@ -156,6 +181,18 @@ class ElicitConfirmResponse(BaseModel):
     analyze: AnalyzeResponse
 
 
+class ElicitPlanResponse(BaseModel):
+    elicitation: ElicitationState
+    analyze: AnalyzeResponse
+    plan_ready: bool = False
+    session_closed: bool = False
+
+
+class ElicitExecuteResponse(BaseModel):
+    elicitation: ElicitationState
+    generate: GenerateResponse
+
+
 class ElicitSessionItem(BaseModel):
     session_id: str
     status: str | None = None
@@ -163,6 +200,7 @@ class ElicitSessionItem(BaseModel):
     confirmed_at: str | None = None
     summary: str = ""
     message_count: int = 0
+    plan_ready: bool = False
 
 
 class ElicitSessionsResponse(BaseModel):
@@ -199,3 +237,76 @@ class RuntimeLogResponse(BaseModel):
     url: str
     text: str = ""
     updated_at: str = ""
+
+
+class RuntimeStopResponse(BaseModel):
+    ok: bool
+    lang: str
+    kind: str
+    port: int
+    killed: list[int] = Field(default_factory=list)
+    listening: bool = False
+    url: str = ""
+    message: str = ""
+
+
+class AgentLangMeta(BaseModel):
+    lang: str
+    backend_port: int
+    frontend_port: int | None = None
+    has_frontend: bool = False
+
+
+class AgentMetaResponse(BaseModel):
+    default_lang: str
+    langs: list[AgentLangMeta]
+
+
+class PlatformSettingsResponse(BaseModel):
+    max_turns: int = 20
+    min_max_turns: int = 3
+    max_max_turns: int = 50
+    tree_indent_ch: int = 2
+    min_tree_indent_ch: int = 1
+    max_tree_indent_ch: int = 8
+    llm_base_url: str = ""
+    llm_model: str = ""
+    has_llm_api_key: bool = False
+    llm_api_key_masked: str = ""
+    auto_code_root: str = ""
+    default_lang: str = "java"
+
+
+class PlatformSettingsUpdateBody(BaseModel):
+    max_turns: int | None = Field(default=None, ge=3, le=50, description="单会话用户发言上限（达限自动总结关闭）")
+    tree_indent_ch: int | None = Field(default=None, ge=1, le=8, description="产物文件树每层缩进字符宽")
+    llm_base_url: str | None = Field(default=None, description="LLM Base URL；空串清除后回退 .env")
+    llm_api_key: str | None = Field(default=None, description="省略/null 不改；空串清除；非空则写入")
+    llm_model: str | None = Field(default=None, description="模型名；空串清除后回退 .env")
+
+
+class ProjectTreeNode(BaseModel):
+    name: str
+    path: str
+    type: str
+    children: list["ProjectTreeNode"] | None = None
+
+
+class ProjectTreeResponse(BaseModel):
+    lang: str
+    root: str
+    tree: list[ProjectTreeNode] = Field(default_factory=list)
+
+
+class ProjectFileResponse(BaseModel):
+    lang: str
+    path: str
+    content: str
+    size: int
+    truncated: bool = False
+
+
+class ElicitDeleteResponse(BaseModel):
+    lang: str
+    session_id: str
+    deleted: bool = True

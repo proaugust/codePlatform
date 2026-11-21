@@ -13,7 +13,8 @@ from backend.services.llm import LlmError, chat_completion
 logger = logging.getLogger(__name__)
 
 SUPPORTED_LANGS = frozenset({"java", "go"})
-PRESERVE_ON_GENERATE = frozenset({"docs"})
+# 后端重生成时保留：需求文档、业务前端（含 node_modules）、日志与构建产物，避免 WinError 5 锁文件拖垮整次执行
+PRESERVE_ON_GENERATE = frozenset({"docs", "frontend", "logs", "target", ".git"})
 
 
 class CodegenError(RuntimeError):
@@ -53,9 +54,13 @@ def _system_prompt(lang: str, port: int) -> str:
         '  "endpoints": [{"method": "GET", "path": "/health", "description": "..."}]\n'
         "}\n"
         "Rules:\n"
-        "- Always include GET /health returning JSON {\"status\":\"ok\"}.\n"
-        "- Implement APIs and data model described in the provided requirement docs.\n"
-        "- Do NOT write files under docs/.\n"
+        "- Always include GET /health returning JSON {\"status\":\"ok\"}. Prefer also mapping GET / to the same health payload.\n"
+        "- If a GlobalExceptionHandler / @RestControllerAdvice catch-all exists, do NOT map NoResourceFoundException / NoHandlerFoundException to 500; return 404 instead.\n"
+        "- Always include src/main/resources/static/favicon.ico (minimal valid ICO is fine) so browser /favicon.ico does not hit NoResourceFoundException.\n"
+        "- Implement APIs and data model described in the provided requirement docs and Change Plan.\n"
+        "- If Change Plan / docs list DELETE (or other) endpoints, they MUST exist in controllers and endpoints[].\n"
+        "- If an existing domain (e.g. Book) is already in the project/docs, prefer extending it; do not replace with an unrelated greenfield system.\n"
+        "- Do NOT write files under docs/ or frontend/.\n"
         "- paths must be relative, use forward slashes, no .. or absolute paths.\n"
         "- content must be full file source, not placeholders like TODO implement later.\n"
         f"- {stack}\n"
@@ -71,7 +76,24 @@ def _safe_rel_path(raw: str) -> Path:
         raise CodegenError(f"非法文件路径: {raw!r}")
     if path.parts and path.parts[0].lower() == "docs":
         raise CodegenError("禁止覆盖 docs/ 需求文档")
+    if path.parts and path.parts[0].lower() == "frontend":
+        raise CodegenError("禁止在后端生成中写入 frontend/（由前端生成管线负责）")
     return path
+
+
+def _rmtree_retry(path: Path, *, attempts: int = 4) -> None:
+    import time
+
+    last: OSError | None = None
+    for i in range(attempts):
+        try:
+            shutil.rmtree(path)
+            return
+        except OSError as e:
+            last = e
+            time.sleep(0.4 * (i + 1))
+    assert last is not None
+    raise CodegenError(f"无法删除目录 {path}: {last}") from last
 
 
 def _clear_dir(path: Path, *, preserve: frozenset[str] = PRESERVE_ON_GENERATE) -> None:
@@ -82,9 +104,12 @@ def _clear_dir(path: Path, *, preserve: frozenset[str] = PRESERVE_ON_GENERATE) -
         if child.name in preserve:
             continue
         if child.is_dir():
-            shutil.rmtree(child)
+            _rmtree_retry(child)
         else:
-            child.unlink()
+            try:
+                child.unlink()
+            except OSError as e:
+                raise CodegenError(f"无法删除文件 {child}: {e}") from e
 
 
 def _write_files(root: Path, files: list[dict[str, Any]]) -> list[str]:

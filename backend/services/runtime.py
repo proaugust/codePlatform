@@ -112,11 +112,33 @@ def _open_log_handle(path: Path) -> IO[str]:
     return path.open("a", encoding="utf-8", newline="\n")
 
 
+def _java_sources_newer_than(root: Path, artifact: Path) -> bool:
+    """源码比产物新时，避免继续跑旧 jar（如异常处理已改但未重新打包）。"""
+    try:
+        art_mtime = artifact.stat().st_mtime
+    except OSError:
+        return True
+    src = root / "src"
+    if not src.is_dir():
+        return False
+    for p in src.rglob("*"):
+        if not p.is_file():
+            continue
+        try:
+            if p.stat().st_mtime > art_mtime:
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def _java_cmd(root: Path) -> list[str]:
     jar_candidates = sorted((root / "target").glob("*.jar")) if (root / "target").is_dir() else []
     jar_candidates = [p for p in jar_candidates if not p.name.endswith(".original")]
     if jar_candidates:
-        return ["java", "-jar", str(jar_candidates[-1])]
+        jar = jar_candidates[-1]
+        if not _java_sources_newer_than(root, jar):
+            return ["java", "-jar", str(jar)]
     return ["mvn", "-DskipTests", "spring-boot:run"]
 
 
@@ -184,29 +206,183 @@ def _popen_logged(cmd: list[str], *, cwd: Path, log: Path) -> subprocess.Popen[A
     return proc
 
 
-def _wait_listening(port: int, *, timeout_sec: float = 2.0) -> bool:
+def _wait_listening(port: int, *, timeout_sec: float = 25.0) -> bool:
+    """Spring Boot 常需十余秒才监听；过短会导致页面仍显示「启动」按钮。"""
     deadline = time.time() + timeout_sec
     while time.time() < deadline:
         if _port_open("127.0.0.1", port):
             return True
-        time.sleep(0.25)
+        time.sleep(0.35)
     return _port_open("127.0.0.1", port)
+
+
+def _http_json(method: str, url: str, *, body: dict[str, Any] | None = None, timeout: float = 5.0) -> tuple[int, Any]:
+    import json
+    import urllib.error
+    import urllib.request
+
+    data = None if body is None else json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        method=method.upper(),
+        headers={"Accept": "application/json", "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", errors="ignore")
+            payload: Any = raw
+            if raw:
+                try:
+                    payload = json.loads(raw)
+                except json.JSONDecodeError:
+                    pass
+            return int(resp.status), payload
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode("utf-8", errors="ignore")
+        payload: Any = raw
+        if raw:
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError:
+                pass
+        return int(e.code), payload
+    except OSError as e:
+        return 0, str(e)
+
+
+def smoke_after_generate(
+    lang: str,
+    *,
+    plan: dict[str, Any] | None = None,
+    endpoints: list[Any] | None = None,
+) -> dict[str, Any]:
+    """生成后冒烟：健康检查；若计划含图书 DELETE 则 create→delete 验证（后端需已在听）。"""
+    lang = lang.lower().strip()
+    if lang not in LANG_PORTS:
+        return {"ok": False, "skipped": True, "message": f"不支持的 lang={lang}"}
+
+    port = LANG_PORTS[lang]
+    base = f"http://127.0.0.1:{port}"
+    if not _port_open("127.0.0.1", port):
+        return {
+            "ok": False,
+            "skipped": True,
+            "listening": False,
+            "message": f"后端未监听 {port}，跳过冒烟（请先启动后再测删除等接口）",
+        }
+
+    status, health = _http_json("GET", f"{base}/health")
+    if status != 200:
+        return {
+            "ok": False,
+            "skipped": False,
+            "listening": True,
+            "message": f"GET /health 失败 HTTP {status}: {health}",
+        }
+
+    apis = list((plan or {}).get("apis") or [])
+    for ep in endpoints or []:
+        if isinstance(ep, dict):
+            apis.append(ep)
+
+    want_book_delete = False
+    for ep in apis:
+        if not isinstance(ep, dict):
+            continue
+        method = str(ep.get("method") or "").upper()
+        path = str(ep.get("path") or "")
+        if method == "DELETE" and "/api/books" in path:
+            want_book_delete = True
+            break
+
+    if not want_book_delete:
+        return {
+            "ok": True,
+            "skipped": False,
+            "listening": True,
+            "message": "GET /health 通过；计划未含图书 DELETE，未跑删除冒烟",
+        }
+
+    isbn = f"smoke{int(time.time()) % 10_000_000:07d}"
+    st, created = _http_json(
+        "POST",
+        f"{base}/api/books",
+        body={"title": "smoke-book", "author": "smoke", "isbn": isbn, "stock": 1},
+    )
+    if st not in {200, 201} or not isinstance(created, dict) or created.get("id") is None:
+        return {
+            "ok": False,
+            "skipped": False,
+            "listening": True,
+            "message": f"图书 DELETE 冒烟：创建失败 HTTP {st}: {created}",
+        }
+
+    book_id = created.get("id")
+    st2, deleted = _http_json("DELETE", f"{base}/api/books/{book_id}")
+    if st2 not in {200, 204}:
+        return {
+            "ok": False,
+            "skipped": False,
+            "listening": True,
+            "message": f"图书 DELETE 冒烟：删除失败 HTTP {st2}: {deleted}",
+        }
+
+    st3, _ = _http_json("GET", f"{base}/api/books/{book_id}")
+    if st3 not in {404, 400}:
+        return {
+            "ok": False,
+            "skipped": False,
+            "listening": True,
+            "message": f"图书 DELETE 冒烟：删除后仍可访问 HTTP {st3}",
+        }
+
+    return {
+        "ok": True,
+        "skipped": False,
+        "listening": True,
+        "message": f"GET /health 通过；图书 DELETE 冒烟通过（id={book_id}）",
+    }
+
+
+def _normalize_log_kind(kind: str) -> str:
+    kind = kind.lower().strip()
+    if kind not in {"backend", "frontend"}:
+        raise ProjectRuntimeError("kind 仅支持 backend | frontend")
+    return kind
+
+
+def _decode_log_bytes(data: bytes) -> str:
+    """运行日志可能混有 UTF-8（Vite）与系统编码（Windows cmd 中文错误）。"""
+    if not data:
+        return ""
+    scored: list[tuple[int, int, str]] = []
+    for enc in ("utf-8", "gbk", "cp936"):
+        try:
+            text = data.decode(enc)
+            bad = 0
+        except UnicodeDecodeError:
+            text = data.decode(enc, errors="replace")
+            bad = text.count("\ufffd")
+        cjk = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
+        scored.append((bad, -cjk, text))
+    scored.sort()
+    return scored[0][2]
 
 
 def read_runtime_log(lang: str, kind: str, *, max_chars: int = 20000) -> dict[str, Any]:
     lang = lang.lower().strip()
     if lang not in LANG_PORTS:
         raise ProjectRuntimeError(f"不支持的 target: {lang}")
-    kind = kind.lower().strip()
-    if kind not in {"backend", "frontend"}:
-        raise ProjectRuntimeError("kind 仅支持 backend | frontend")
+    kind = _normalize_log_kind(kind)
 
     path = log_path(lang, kind)
     port = FRONTEND_PORT if kind == "frontend" else LANG_PORTS[lang]
     text = ""
     if path.is_file():
-        raw = path.read_text(encoding="utf-8", errors="ignore")
-        text = raw[-max_chars:] if len(raw) > max_chars else raw
+        raw = path.read_bytes()
+        decoded = _decode_log_bytes(raw)
+        text = decoded[-max_chars:] if len(decoded) > max_chars else decoded
     return {
         "lang": lang,
         "kind": kind,
@@ -218,6 +394,23 @@ def read_runtime_log(lang: str, kind: str, *, max_chars: int = 20000) -> dict[st
         "text": text,
         "updated_at": _now(),
     }
+
+
+def clear_runtime_log(lang: str, kind: str) -> dict[str, Any]:
+    """清空对应 runtime 日志文件（写入一条 cleared 标记）。"""
+    lang = lang.lower().strip()
+    if lang not in LANG_PORTS:
+        raise ProjectRuntimeError(f"不支持的 target: {lang}")
+    kind = _normalize_log_kind(kind)
+    path = log_path(lang, kind)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    marker = f"[{_now()}] cleared\n"
+    try:
+        with path.open("w", encoding="utf-8", newline="\n") as f:
+            f.write(marker)
+    except OSError as e:
+        raise ProjectRuntimeError(f"清空日志失败: {e}") from e
+    return read_runtime_log(lang, kind)
 
 
 def restart_project(lang: str, *, with_frontend: bool = True) -> dict[str, Any]:
@@ -247,7 +440,7 @@ def restart_project(lang: str, *, with_frontend: bool = True) -> dict[str, Any]:
         bat = _write_java_bat(root, port)
         cmd = _java_cmd(root)
         proc = _popen_logged(cmd, cwd=root, log=blog)
-        listening = _wait_listening(port, timeout_sec=2.0)
+        listening = _wait_listening(port)
         url = f"http://127.0.0.1:{port}"
         backend.update(
             {
@@ -288,7 +481,7 @@ def restart_project(lang: str, *, with_frontend: bool = True) -> dict[str, Any]:
         killed = kill_port(port)
         bat = _write_go_bat(go_root, port)
         proc = _popen_logged(["go", "run", "."], cwd=go_root, log=blog)
-        listening = _wait_listening(port, timeout_sec=2.0)
+        listening = _wait_listening(port)
         url = f"http://127.0.0.1:{port}"
         backend.update(
             {
@@ -316,4 +509,72 @@ def restart_project(lang: str, *, with_frontend: bool = True) -> dict[str, Any]:
         "backend": backend,
         "frontend": frontend,
         "message": backend.get("message") or "",
+    }
+
+
+def stop_backend(lang: str) -> dict[str, Any]:
+    """停止占用后端端口的进程。"""
+    lang = lang.lower().strip()
+    if lang not in LANG_PORTS:
+        raise ProjectRuntimeError(f"不支持的 target: {lang}")
+
+    port = LANG_PORTS[lang]
+    was_listening = _port_open("127.0.0.1", port)
+    killed = kill_port(port)
+    still = _port_open("127.0.0.1", port)
+    blog = log_path(lang, "backend")
+    if killed:
+        _append_log(blog, f"[{_now()}] STOP backend port={port} killed={killed}")
+    msg = (
+        f"已停止 {lang} 后端（端口 {port}，killed={killed}）"
+        if killed
+        else (
+            f"{lang} 后端端口 {port} 原本未监听"
+            if not was_listening
+            else f"未能停止 {lang} 后端（端口 {port} 仍在监听）"
+        )
+    )
+    return {
+        "ok": not still,
+        "lang": lang,
+        "kind": "backend",
+        "port": port,
+        "killed": killed,
+        "listening": still,
+        "url": f"http://127.0.0.1:{port}",
+        "message": msg,
+    }
+
+
+def stop_frontend(lang: str) -> dict[str, Any]:
+    """停止占用前端端口的进程。"""
+    lang = lang.lower().strip()
+    if lang not in LANG_PORTS:
+        raise ProjectRuntimeError(f"不支持的 target: {lang}")
+
+    port = FRONTEND_PORT
+    was_listening = _port_open("127.0.0.1", port)
+    killed = kill_port(port)
+    still = _port_open("127.0.0.1", port)
+    flog = log_path(lang, "frontend")
+    if killed:
+        _append_log(flog, f"[{_now()}] STOP frontend port={port} killed={killed}")
+    msg = (
+        f"已停止 Vue 前端（端口 {port}，killed={killed}）"
+        if killed
+        else (
+            f"Vue 前端端口 {port} 原本未监听"
+            if not was_listening
+            else f"未能停止 Vue 前端（端口 {port} 仍在监听）"
+        )
+    )
+    return {
+        "ok": not still,
+        "lang": lang,
+        "kind": "frontend",
+        "port": port,
+        "killed": killed,
+        "listening": still,
+        "url": f"http://127.0.0.1:{port}",
+        "message": msg,
     }
