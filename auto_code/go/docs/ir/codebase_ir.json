@@ -30,11 +30,27 @@
     },
     "jpa": {},
     "layers": {
-      "handler": [],
-      "service": [],
-      "repository": []
+      "handler": [
+        "internal/handler/book_handler.go",
+        "internal/handler/response.go",
+        "internal/handler/static.go"
+      ],
+      "service": [
+        "internal/service/book_service.go",
+        "internal/service/errors.go"
+      ],
+      "repository": [
+        "internal/repository/book_repository.go"
+      ]
     },
     "tree": [
+      "internal/handler/book_handler.go",
+      "internal/handler/response.go",
+      "internal/handler/static.go",
+      "internal/model/book.go",
+      "internal/repository/book_repository.go",
+      "internal/service/book_service.go",
+      "internal/service/errors.go",
       "main.go"
     ],
     "apis": [
@@ -74,11 +90,6 @@
         "source": "main.go"
       },
       {
-        "method": "*",
-        "path": "/",
-        "source": "main.go"
-      },
-      {
         "method": "GET",
         "path": "/health",
         "source": "main.go"
@@ -112,6 +123,76 @@
         "method": "PATCH",
         "path": "/api/books/{id}/stock",
         "source": "main.go"
+      },
+      {
+        "method": "*",
+        "path": "GET /api/books",
+        "source": "internal/handler/book_handler.go"
+      },
+      {
+        "method": "*",
+        "path": "POST /api/books",
+        "source": "internal/handler/book_handler.go"
+      },
+      {
+        "method": "*",
+        "path": "GET /api/books/{id}",
+        "source": "internal/handler/book_handler.go"
+      },
+      {
+        "method": "*",
+        "path": "DELETE /api/books/{id}",
+        "source": "internal/handler/book_handler.go"
+      },
+      {
+        "method": "*",
+        "path": "PATCH /api/books/{id}/stock",
+        "source": "internal/handler/book_handler.go"
+      },
+      {
+        "method": "GET",
+        "path": "/api/books",
+        "source": "internal/handler/book_handler.go"
+      },
+      {
+        "method": "POST",
+        "path": "/api/books",
+        "source": "internal/handler/book_handler.go"
+      },
+      {
+        "method": "GET",
+        "path": "/api/books/{id}",
+        "source": "internal/handler/book_handler.go"
+      },
+      {
+        "method": "DELETE",
+        "path": "/api/books/{id}",
+        "source": "internal/handler/book_handler.go"
+      },
+      {
+        "method": "PATCH",
+        "path": "/api/books/{id}/stock",
+        "source": "internal/handler/book_handler.go"
+      },
+      {
+        "method": "*",
+        "path": "GET /{$}",
+        "source": "internal/handler/static.go"
+      },
+      {
+        "method": "*",
+        "path": "GET /static/",
+        "source": "internal/handler/static.go"
+      },
+      {
+        "method": "GET",
+        "path": "/{$}",
+        "source": "internal/handler/static.go"
+      },
+      {
+        "method": "GET",
+        "path": "/static/",
+        "source": "internal/handler/static.go"
       }
     ],
     "notes": []

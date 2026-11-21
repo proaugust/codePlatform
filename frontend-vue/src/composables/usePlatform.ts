@@ -60,6 +60,8 @@ export type SessionItem = {
 }
 
 export type Lang = 'java' | 'go'
+/** 产物文件树浏览目标（与 java/go 同级含共用 frontend） */
+export type TreeTarget = Lang | 'frontend'
 export type LangMeta = {
   lang: Lang
   backend_port: number
@@ -204,6 +206,16 @@ let draftWatchBound = false
 
 function isLang(v: unknown): v is Lang {
   return v === 'java' || v === 'go'
+}
+
+function isTreeTarget(v: unknown): v is TreeTarget {
+  return v === 'java' || v === 'go' || v === 'frontend'
+}
+
+function treeTargetLabel(t: TreeTarget): string {
+  if (t === 'java') return 'Java'
+  if (t === 'go') return 'Go'
+  return 'Frontend'
 }
 
 function pushRunLog(item: Omit<RunLogItem, 'id' | 'at'>) {
@@ -562,7 +574,12 @@ async function onConclude() {
 }
 
 async function onPlan() {
-  if (!canPlan.value) return
+  if (!canPlan.value) {
+    error.value = sessionClosed.value
+      ? '会话已关闭，请先「新开窗口」'
+      : '请先输入需求或编辑结论，再点「分析计划」'
+    return
+  }
   planning.value = true
   analyzing.value = true
   error.value = ''
@@ -612,7 +629,16 @@ async function onPlan() {
 }
 
 async function onExecute() {
-  if (!canExecute.value) return
+  if (!canExecute.value) {
+    error.value = sessionClosed.value
+      ? '会话已关闭，请先「新开窗口」'
+      : busy.value
+        ? '正在执行其它任务，请稍候'
+        : '请先点「分析计划」或「分析并改代码」（仅聊天确认不会改代码）'
+    pipelineNote.value = error.value
+    pushRunLog({ kind: 'error', title: '无法执行生成', message: error.value })
+    return
+  }
   executing.value = true
   generating.value = true
   error.value = ''
@@ -657,9 +683,23 @@ async function onExecute() {
 
 /** 分析计划 + 执行生成（一键改代码） */
 async function onPlanAndExecute() {
-  if (!canPlan.value || busy.value) return
+  if (!canPlan.value || busy.value) {
+    error.value = busy.value
+      ? '正在执行其它任务，请稍候'
+      : sessionClosed.value
+        ? '会话已关闭，请先「新开窗口」'
+        : '请先输入需求或编辑结论，再点「分析并改代码」'
+    pipelineNote.value = error.value
+    return
+  }
   await onPlan()
-  if (error.value || !planReady.value) return
+  if (error.value || !planReady.value) {
+    if (!error.value) {
+      error.value = '计划未就绪，未能继续执行生成'
+      pipelineNote.value = error.value
+    }
+    return
+  }
   await onExecute()
 }
 
@@ -961,47 +1001,49 @@ function prefixTreePaths(nodes: TreeNode[], prefix: string): TreeNode[] {
   }))
 }
 
-function parseQualifiedPath(qualified: string): { lang: Lang; rel: string } {
+function parseQualifiedPath(qualified: string): { target: TreeTarget; rel: string } {
   const raw = qualified.replace(/\\/g, '/').replace(/^\/+/, '')
   const slash = raw.indexOf('/')
   const head = (slash >= 0 ? raw.slice(0, slash) : raw).toLowerCase()
-  if (!isLang(head)) throw new Error(`无效路径（需 java/... 或 go/...）: ${qualified}`)
+  if (!isTreeTarget(head)) {
+    throw new Error(`无效路径（需 java/...、go/... 或 frontend/...）: ${qualified}`)
+  }
   const rel = slash >= 0 ? raw.slice(slash + 1) : ''
   if (!rel) throw new Error('请选择具体文件')
-  return { lang: head, rel }
+  return { target: head, rel }
 }
 
-/** 代码页：按语言加载单棵树（路径仍带 java/ 或 go/ 前缀） */
-async function loadProjectTree(lang: Lang): Promise<{ root: string; tree: TreeNode[] }> {
-  const r = await fetch(`/api/agent/${lang}/tree`)
+/** 代码页：按目标加载单棵树（路径带 java/、go/ 或 frontend/ 前缀） */
+async function loadProjectTree(target: TreeTarget): Promise<{ root: string; tree: TreeNode[] }> {
+  const r = await fetch(`/api/agent/${target}/tree`)
   const data = await r.json()
-  if (!r.ok) throw new Error(`${lang}: ${detailOf(data)}`)
+  if (!r.ok) throw new Error(`${target}: ${detailOf(data)}`)
   const children = Array.isArray(data.tree) ? (data.tree as TreeNode[]) : []
   return {
-    root: String(data.root || `auto_code/${lang}`),
-    tree: prefixTreePaths(children, lang),
+    root: String(data.root || `auto_code/${target}`),
+    tree: prefixTreePaths(children, target),
   }
 }
 
-/** path 形如 java/src/... 或 go/code/... */
+/** path 形如 java/src/...、go/... 或 frontend/src/... */
 async function loadProjectFile(qualifiedPath: string): Promise<{
   path: string
   content: string
   size: number
   truncated: boolean
-  lang: Lang
+  lang: TreeTarget
 }> {
-  const { lang, rel } = parseQualifiedPath(qualifiedPath)
+  const { target, rel } = parseQualifiedPath(qualifiedPath)
   const q = encodeURIComponent(rel)
-  const r = await fetch(`/api/agent/${lang}/file?path=${q}`)
+  const r = await fetch(`/api/agent/${target}/file?path=${q}`)
   const data = await r.json()
   if (!r.ok) throw new Error(detailOf(data))
   return {
-    path: `${lang}/${String(data.path || rel)}`,
+    path: `${target}/${String(data.path || rel)}`,
     content: String(data.content || ''),
     size: Number(data.size || 0),
     truncated: !!data.truncated,
-    lang,
+    lang: target,
   }
 }
 
@@ -1136,6 +1178,8 @@ export function usePlatform() {
     loadPlatformSettings,
     savePlatformSettings,
     saveMaxTurns,
+    isTreeTarget,
+    treeTargetLabel,
     loadProjectTree,
     loadProjectFile,
     onSend,

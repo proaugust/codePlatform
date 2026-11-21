@@ -20,6 +20,7 @@ type Book struct {
 }
 
 type createBookRequest struct {
+	ID     *int64 `json:"id"`
 	Title  string `json:"title"`
 	Author string `json:"author"`
 	Stock  int    `json:"stock"`
@@ -51,8 +52,8 @@ type apiError struct {
 func (e *apiError) Error() string { return e.message }
 
 var (
-	errInvalidArgument = &apiError{http.StatusBadRequest, "INVALID_ARGUMENT", "请求参数非法"}
-	errInvalidID       = &apiError{http.StatusBadRequest, "INVALID_ID", "图书 ID 非法"}
+	errInvalidArgument = &apiError{http.StatusBadRequest, "VALIDATION_ERROR", "请求参数非法"}
+	errInvalidID       = &apiError{http.StatusBadRequest, "VALIDATION_ERROR", "图书 id 必须为大于 0 的整数"}
 	errNotFound        = &apiError{http.StatusNotFound, "NOT_FOUND", "图书不存在"}
 	errInternal        = &apiError{http.StatusInternalServerError, "INTERNAL_ERROR", "服务内部错误"}
 )
@@ -95,6 +96,9 @@ func (s *Store) Create(req createBookRequest) (*Book, error) {
 	author := strings.TrimSpace(req.Author)
 	if title == "" || author == "" || req.Stock < 0 {
 		return nil, errInvalidArgument
+	}
+	if req.ID != nil && *req.ID <= 0 {
+		return nil, errInvalidID
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -237,7 +241,11 @@ func (s *Server) deleteBook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"code":    "OK",
+		"message": "deleted",
+		"data":    map[string]int64{"id": id},
+	})
 }
 
 var allowedOrigins = map[string]bool{
@@ -270,61 +278,99 @@ const indexHTML = `<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>图书管理</title>
 <style>
-body{font-family:system-ui,sans-serif;margin:0;padding:24px;background:#f5f6f8;color:#222}
-h1{font-size:20px}
-table{border-collapse:collapse;width:100%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.1)}
-th,td{padding:10px 12px;border-bottom:1px solid #eee;text-align:left}
+body{font-family:system-ui,sans-serif;margin:0;padding:24px;background:#f7f7f8;color:#222}
+h1{font-size:20px;margin:0 0 16px}
+table{border-collapse:collapse;width:100%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+th,td{padding:10px 12px;border-bottom:1px solid #eee;text-align:left;font-size:14px}
 th{background:#fafafa;font-weight:600}
-button{cursor:pointer;border:none;border-radius:4px;padding:6px 12px;background:#e53935;color:#fff}
-button:hover{background:#c62828}
-#msg{margin:12px 0;min-height:20px;color:#c62828}
-#empty{color:#888;padding:16px}
+tr.selected{background:#eef5ff}
+button{cursor:pointer;border:1px solid #ccc;background:#fff;border-radius:6px;padding:6px 12px;font-size:13px}
+button.primary{background:#2563eb;border-color:#2563eb;color:#fff}
+button.danger{background:#dc2626;border-color:#dc2626;color:#fff}
+button:disabled{opacity:.5;cursor:not-allowed}
+.toolbar{display:flex;gap:8px;margin-bottom:12px;align-items:center}
+#msg{margin-left:8px;font-size:13px}
+#msg.err{color:#dc2626}
+#msg.ok{color:#16a34a}
+.form{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.form input{padding:6px 8px;border:1px solid #ccc;border-radius:6px;font-size:13px}
 </style>
 </head>
 <body>
-<h1>图书列表</h1>
-<div id="msg"></div>
+<h1>图书管理</h1>
+<div class="form">
+<input id="title" placeholder="书名">
+<input id="author" placeholder="作者">
+<input id="stock" type="number" placeholder="库存" value="0" style="width:90px">
+<button class="primary" id="addBtn">新增</button>
+</div>
+<div class="toolbar">
+<button class="danger" id="delBtn" disabled>删除选中</button>
+<span id="msg"></span>
+</div>
 <table>
-<thead><tr><th>ID</th><th>标题</th><th>作者</th><th>库存</th><th>操作</th></tr></thead>
+<thead><tr><th></th><th>ID</th><th>书名</th><th>作者</th><th>库存</th></tr></thead>
 <tbody id="rows"></tbody>
 </table>
-<div id="empty" style="display:none">暂无图书</div>
 <script>
 const rows=document.getElementById('rows');
+const delBtn=document.getElementById('delBtn');
 const msg=document.getElementById('msg');
-const empty=document.getElementById('empty');
-function setMsg(t){msg.textContent=t||'';}
+let selected=null;
+function setMsg(t,ok){msg.textContent=t||'';msg.className=ok?'ok':'err';}
 async function load(){
-  setMsg('');
   try{
-    const res=await fetch('/api/books');
-    const body=await res.json();
-    const list=(body&&body.data)||[];
+    const r=await fetch('/api/books');
+    const j=await r.json();
+    const list=(j&&j.data)||[];
     rows.innerHTML='';
-    empty.style.display=list.length?'none':'block';
+    selected=null;delBtn.disabled=true;
+    if(!list.length){rows.innerHTML='<tr><td colspan="5" style="color:#888">暂无图书</td></tr>';return;}
     for(const b of list){
       const tr=document.createElement('tr');
-      tr.innerHTML='<td>'+b.id+'</td><td></td><td></td><td>'+b.stock+'</td><td></td>';
-      tr.children[1].textContent=b.title;
-      tr.children[2].textContent=b.author;
-      const btn=document.createElement('button');
-      btn.textContent='删除';
-      btn.onclick=()=>remove(b);
-      tr.children[4].appendChild(btn);
+      tr.innerHTML='<td><input type="radio" name="sel"></td><td>'+b.id+'</td><td>'+esc(b.title)+'</td><td>'+esc(b.author)+'</td><td>'+b.stock+'</td>';
+      tr.querySelector('input').addEventListener('change',()=>{
+        rows.querySelectorAll('tr').forEach(x=>x.classList.remove('selected'));
+        tr.classList.add('selected');
+        selected=b;delBtn.disabled=false;
+      });
       rows.appendChild(tr);
     }
-  }catch(e){setMsg('加载失败：'+e);}
+  }catch(e){setMsg('加载失败: '+e.message,false);}
 }
-async function remove(b){
-  if(!confirm('确定删除《'+b.title+'》吗？'))return;
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+delBtn.addEventListener('click',async()=>{
+  if(!selected)return;
+  if(!confirm('确认删除图书「'+selected.title+'」？'))return;
   try{
-    const res=await fetch('/api/books/'+b.id,{method:'DELETE'});
-    if(res.status===204){await load();return;}
-    let m='删除失败';
-    try{const eb=await res.json();if(eb&&eb.error)m=eb.error.code+': '+eb.error.message;}catch(_){}
-    setMsg(m);
-  }catch(e){setMsg('删除失败：'+e);}
-}
+    const r=await fetch('/api/books/'+selected.id,{method:'DELETE'});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok){
+      const m=(j&&j.error&&j.error.message)||('删除失败('+r.status+')');
+      setMsg(m,false);return;
+    }
+    setMsg('删除成功',true);
+    await load();
+  }catch(e){setMsg('删除失败: '+e.message,false);}
+});
+document.getElementById('addBtn').addEventListener('click',async()=>{
+  const title=document.getElementById('title').value.trim();
+  const author=document.getElementById('author').value.trim();
+  const stock=parseInt(document.getElementById('stock').value||'0',10);
+  try{
+    const r=await fetch('/api/books',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title,author,stock})});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok){
+      const m=(j&&j.error&&j.error.message)||('新增失败('+r.status+')');
+      setMsg(m,false);return;
+    }
+    setMsg('新增成功',true);
+    document.getElementById('title').value='';
+    document.getElementById('author').value='';
+    document.getElementById('stock').value='0';
+    await load();
+  }catch(e){setMsg('新增失败: '+e.message,false);}
+});
 load();
 </script>
 </body>

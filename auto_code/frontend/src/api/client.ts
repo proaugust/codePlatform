@@ -38,6 +38,38 @@ export function formatError(error: unknown): ApiErrorShape {
   return { code: 'UNKNOWN_ERROR', message: '发生未知错误' }
 }
 
+/** Go 常用 { data } / { error:{code,message} }；Java 多为顶层字段。兼容两者。 */
+function unwrapData(payload: unknown): unknown {
+  if (payload && typeof payload === 'object' && !Array.isArray(payload) && 'data' in payload) {
+    return (payload as { data: unknown }).data
+  }
+  return payload
+}
+
+function readErrorFields(payload: unknown): {
+  code?: string
+  message?: string
+  path?: string
+  timestamp?: string
+} {
+  if (!payload || typeof payload !== 'object') return {}
+  const root = payload as Record<string, unknown>
+  const nested =
+    root.error && typeof root.error === 'object' ? (root.error as Record<string, unknown>) : null
+  const src = nested ?? root
+  return {
+    code: typeof src.code === 'string' ? src.code : undefined,
+    message: typeof src.message === 'string' ? src.message : undefined,
+    path: typeof src.path === 'string' ? src.path : typeof root.path === 'string' ? root.path : undefined,
+    timestamp:
+      typeof src.timestamp === 'string'
+        ? src.timestamp
+        : typeof root.timestamp === 'string'
+          ? root.timestamp
+          : undefined,
+  }
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
@@ -54,7 +86,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new ApiError(
       0,
       'NETWORK_ERROR',
-      '无法连接后端服务，请确认服务已在 127.0.0.1:8070 启动',
+      '无法连接后端服务，请到「运行」页确认业务后端已启动',
       path
     )
   }
@@ -74,27 +106,18 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
 
   if (!response.ok) {
-    const payload = (data ?? {}) as Record<string, unknown>
-    const code =
-      typeof payload.code === 'string' && payload.code
-        ? payload.code
-        : `HTTP_${response.status}`
-    const message =
-      typeof payload.message === 'string' && payload.message
-        ? payload.message
-        : typeof data === 'string' && data
-          ? data
-          : `请求失败（HTTP ${response.status}）`
+    const err = readErrorFields(data)
     throw new ApiError(
       response.status,
-      code,
-      message,
-      typeof payload.path === 'string' ? payload.path : path,
-      typeof payload.timestamp === 'string' ? payload.timestamp : undefined
+      err.code || `HTTP_${response.status}`,
+      err.message ||
+        (typeof data === 'string' && data ? data : `请求失败（HTTP ${response.status}）`),
+      err.path || path,
+      err.timestamp
     )
   }
 
-  return data as T
+  return unwrapData(data) as T
 }
 
 export function checkHealth(): Promise<HealthResponse> {
@@ -122,4 +145,8 @@ export function updateStock(id: number, stock: number): Promise<Book> {
     method: 'PATCH',
     body: JSON.stringify({ stock })
   })
+}
+
+export function deleteBook(id: number): Promise<void> {
+  return request<void>(`/api/books/${id}`, { method: 'DELETE' })
 }

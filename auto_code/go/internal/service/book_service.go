@@ -20,9 +20,9 @@ func (s *BookService) ListBooks() ([]*model.Book, error) {
 	return s.repo.List(), nil
 }
 
-func (s *BookService) GetBook(id int) (*model.Book, error) {
+func (s *BookService) GetBook(id int64) (*model.Book, error) {
 	if id <= 0 {
-		return nil, ErrInvalidArgument("invalid book id")
+		return nil, NewInvalidArgument("图书 id 必须为大于 0 的整数")
 	}
 	b, err := s.repo.Get(id)
 	if err != nil {
@@ -32,21 +32,28 @@ func (s *BookService) GetBook(id int) (*model.Book, error) {
 }
 
 func (s *BookService) CreateBook(title, author string, stock int) (*model.Book, error) {
+	return s.CreateBookWithID(0, title, author, stock)
+}
+
+func (s *BookService) CreateBookWithID(id int64, title, author string, stock int) (*model.Book, error) {
+	if id < 0 {
+		return nil, NewInvalidArgument("图书 id 必须为大于 0 的整数")
+	}
 	title = strings.TrimSpace(title)
 	author = strings.TrimSpace(author)
 	if title == "" || len(title) > 200 || author == "" || len(author) > 100 || stock < 0 {
-		return nil, ErrInvalidArgument("invalid title, author or stock")
+		return nil, NewInvalidArgument("invalid title, author or stock")
 	}
-	b, err := s.repo.Create(&model.Book{Title: title, Author: author, Stock: stock})
+	b, err := s.repo.Create(&model.Book{ID: id, Title: title, Author: author, Stock: stock})
 	if err != nil {
 		return nil, mapRepoErr(err)
 	}
 	return b, nil
 }
 
-func (s *BookService) DeleteBook(id int) error {
+func (s *BookService) DeleteBook(id int64) error {
 	if id <= 0 {
-		return ErrInvalidArgument("invalid book id")
+		return NewInvalidArgument("图书 id 必须为大于 0 的整数")
 	}
 	if err := s.repo.Delete(id); err != nil {
 		return mapRepoErr(err)
@@ -54,11 +61,25 @@ func (s *BookService) DeleteBook(id int) error {
 	return nil
 }
 
-func (s *BookService) UpdateStock(id, delta int) (*model.Book, error) {
+func (s *BookService) UpdateStock(id int64, delta int) (*model.Book, error) {
 	if id <= 0 {
-		return nil, ErrInvalidArgument("invalid book id")
+		return nil, NewInvalidArgument("图书 id 必须为大于 0 的整数")
 	}
 	b, err := s.repo.UpdateStock(id, delta)
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+	return b, nil
+}
+
+func (s *BookService) SetStock(id int64, stock int) (*model.Book, error) {
+	if id <= 0 {
+		return nil, NewInvalidArgument("图书 id 必须为大于 0 的整数")
+	}
+	if stock < 0 {
+		return nil, NewInvalidArgument("stock must be >= 0")
+	}
+	b, err := s.repo.SetStock(id, stock)
 	if err != nil {
 		return nil, mapRepoErr(err)
 	}
@@ -68,9 +89,9 @@ func (s *BookService) UpdateStock(id, delta int) (*model.Book, error) {
 func mapRepoErr(err error) error {
 	switch {
 	case errors.Is(err, repository.ErrNotFound):
-		return ErrNotFound("book not found")
+		return NewNotFound("图书不存在")
 	case errors.Is(err, repository.ErrInvalidArgument):
-		return ErrInvalidArgument(err.Error())
+		return NewInvalidArgument("%s", err.Error())
 	default:
 		return err
 	}

@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import FileTreeNode from '../components/FileTreeNode.vue'
-import { usePlatform, type Lang, type TreeNode } from '../composables/usePlatform'
+import {
+  usePlatform,
+  type Lang,
+  type TreeNode,
+  type TreeTarget,
+} from '../composables/usePlatform'
 import { highlightCode, languageFromPath } from '../utils/highlight'
 import 'highlight.js/styles/github-dark.css'
 
@@ -11,10 +16,19 @@ const TREE_WIDTH_DEFAULT = 420
 const TREE_WIDTH_MIN = 260
 const TREE_WIDTH_MAX = 720
 
-const { error, target, treeIndentCh, loadProjectTree, loadProjectFile, loadPlatformSettings } = usePlatform()
+const {
+  error,
+  target,
+  treeIndentCh,
+  isTreeTarget,
+  treeTargetLabel,
+  loadProjectTree,
+  loadProjectFile,
+  loadPlatformSettings,
+} = usePlatform()
 
-/** 代码页浏览语言，与顶栏生成目标解耦，默认跟当前 target */
-const viewLang = ref<Lang>(target.value)
+/** 代码页浏览目标，与顶栏生成目标解耦；默认跟当前 target */
+const viewLang = ref<TreeTarget>(target.value)
 const tree = ref<TreeNode[]>([])
 const rootPath = ref('')
 const selectedPath = ref('')
@@ -73,7 +87,7 @@ function loadBrowseState() {
       selectedPath?: string
       expandedPaths?: string[]
     }
-    if (data.viewLang === 'java' || data.viewLang === 'go') {
+    if (isTreeTarget(data.viewLang)) {
       viewLang.value = data.viewLang
     }
     if (typeof data.selectedPath === 'string') {
@@ -241,7 +255,7 @@ async function onSelect(path: string) {
   await openFile(path)
 }
 
-function onSwitchViewLang(lang: Lang) {
+function onSwitchViewLang(lang: TreeTarget) {
   if (lang === viewLang.value) return
   viewLang.value = lang
   selectedPath.value = ''
@@ -270,7 +284,9 @@ onBeforeUnmount(() => {
   document.body.classList.remove('resizing-tree')
 })
 
-watch(target, (t) => {
+watch(target, (t: Lang) => {
+  // 顶栏切 java/go 时跟随；正在看 Frontend 时不打断
+  if (viewLang.value === 'frontend') return
   if (t !== viewLang.value) {
     viewLang.value = t
     selectedPath.value = ''
@@ -286,7 +302,7 @@ watch(target, (t) => {
 
 <template>
   <div class="page-toolbar">
-    <div class="lang-switch" role="group" aria-label="浏览语言">
+    <div class="lang-switch" role="group" aria-label="浏览目标">
       <button
         type="button"
         :class="['lang-btn', { active: viewLang === 'java' }]"
@@ -301,17 +317,24 @@ watch(target, (t) => {
       >
         Go
       </button>
+      <button
+        type="button"
+        :class="['lang-btn', { active: viewLang === 'frontend' }]"
+        @click="onSwitchViewLang('frontend')"
+      >
+        Frontend
+      </button>
     </div>
     <button type="button" class="btn-ghost" :disabled="loadingTree" @click="refreshTree">
       {{ loadingTree ? '加载中…' : '刷新文件树' }}
     </button>
-    <span class="muted">分别浏览 {{ viewLang === 'java' ? 'Java' : 'Go' }} 源码 · 拖中间分隔条可拉宽文件树</span>
+    <span class="muted">分别浏览 {{ treeTargetLabel(viewLang) }} 源码 · 拖中间分隔条可拉宽文件树</span>
   </div>
 
   <div ref="browserEl" class="code-browser" :class="{ dragging }">
     <aside class="code-tree" :style="{ width: `${treeWidth}px` }">
       <div class="code-tree-head">
-        <strong>{{ viewLang === 'java' ? 'Java' : 'Go' }} 文件树</strong>
+        <strong>{{ treeTargetLabel(viewLang) }} 文件树</strong>
         <span v-if="rootPath" class="muted tree-root" :title="rootPath">{{ rootPath }}</span>
       </div>
       <div class="code-tree-body">

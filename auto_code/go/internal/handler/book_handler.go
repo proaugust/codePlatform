@@ -26,13 +26,15 @@ func (h *BookHandler) Register(mux *http.ServeMux) {
 }
 
 type createBookRequest struct {
+	ID     *int64 `json:"id"`
 	Title  string `json:"title"`
 	Author string `json:"author"`
 	Stock  int    `json:"stock"`
 }
 
 type updateStockRequest struct {
-	Delta int `json:"delta"`
+	Stock *int `json:"stock"`
+	Delta *int `json:"delta"`
 }
 
 func (h *BookHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -41,13 +43,17 @@ func (h *BookHandler) List(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": books})
+	writeSuccess(w, http.StatusOK, "success", books)
 }
 
 func (h *BookHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req createBookRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "invalid request body")
+		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid request body")
+		return
+	}
+	if req.ID != nil && *req.ID <= 0 {
+		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "图书 id 必须为大于 0 的整数")
 		return
 	}
 	book, err := h.svc.CreateBook(req.Title, req.Author, req.Stock)
@@ -55,7 +61,7 @@ func (h *BookHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"data": book})
+	writeSuccess(w, http.StatusCreated, "success", book)
 }
 
 func (h *BookHandler) Get(w http.ResponseWriter, r *http.Request) {
@@ -68,7 +74,7 @@ func (h *BookHandler) Get(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": book})
+	writeSuccess(w, http.StatusOK, "success", book)
 }
 
 func (h *BookHandler) Delete(w http.ResponseWriter, r *http.Request) {
@@ -80,7 +86,7 @@ func (h *BookHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeSuccess(w, http.StatusOK, "deleted", map[string]any{"id": id})
 }
 
 func (h *BookHandler) UpdateStock(w http.ResponseWriter, r *http.Request) {
@@ -90,22 +96,34 @@ func (h *BookHandler) UpdateStock(w http.ResponseWriter, r *http.Request) {
 	}
 	var req updateStockRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "invalid request body")
+		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid request body")
 		return
 	}
-	book, err := h.svc.UpdateStock(id, req.Delta)
+	var (
+		book any
+		err  error
+	)
+	switch {
+	case req.Stock != nil:
+		book, err = h.svc.SetStock(id, *req.Stock)
+	case req.Delta != nil:
+		book, err = h.svc.UpdateStock(id, *req.Delta)
+	default:
+		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "stock or delta required")
+		return
+	}
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": book})
+	writeSuccess(w, http.StatusOK, "success", book)
 }
 
 func parseID(w http.ResponseWriter, r *http.Request) (int, bool) {
 	raw := r.PathValue("id")
 	id, err := strconv.Atoi(raw)
 	if err != nil || id <= 0 {
-		writeError(w, http.StatusBadRequest, "INVALID_ID", "invalid book id")
+		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "图书 id 必须为大于 0 的整数")
 		return 0, false
 	}
 	return id, true
@@ -119,7 +137,7 @@ func writeServiceError(w http.ResponseWriter, err error) {
 			writeError(w, http.StatusNotFound, "NOT_FOUND", se.Message)
 			return
 		case service.CodeInvalidArgument:
-			writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", se.Message)
+			writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", se.Message)
 			return
 		}
 	}

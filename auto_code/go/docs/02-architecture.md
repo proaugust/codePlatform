@@ -1,50 +1,25 @@
-# 架构设计
+# 架构
 
-## 总体架构
-采用经典三层结构（Handler / Service / Repository），基于 Go 标准库 `net/http` 与 `http.ServeMux`（Go 1.22 支持方法+路径模式匹配）。
+## 分层
+- **Handler 层**（`internal/handler`）：HTTP 路由处理、参数解析与校验、JSON 响应封装、CORS、静态资源托管。
+- **Service 层**（`internal/service`）：业务规则（删除前存在性校验、错误语义映射），返回领域错误。
+- **Repository 层**（`internal/repository`）：内存存储读写，使用 `sync.RWMutex` 保证并发安全。
+- **Model 层**（`internal/model`）：图书实体定义。
 
-```
-浏览器(静态页面) --HTTP--> net/http ServeMux
-                              ├── /health            (健康检查)
-                              ├── /api/books...      (Handler 层)
-                              └── /                  (静态资源托管)
-                                    │
-                              Service 层（业务校验）
-                                    │
-                              Repository 层（内存存储 + RWMutex）
-```
+## 模块与技术选型
+- 语言/运行时：Go 1.22，module `example.com/autocode`。
+- Web：标准库 `net/http`，使用 `http.ServeMux` 的路径模式（`GET /api/books/{id}`、`DELETE /api/books/{id}`）。
+- 静态托管：`internal/handler/static.go` 提供 `/` 与 `/static/` 静态文件服务。
+- 并发：Repository 内 `sync.RWMutex`。
+- 前端：纯静态 HTML/CSS/JS（`fetch` 调用 API），无构建步骤。
 
-## 分层与模块
-### Handler 层（`internal/handler`）
-- 路由注册与请求解析（路径参数 `{id}`、JSON 请求体）。
-- 统一响应封装：成功 `{data:...}` 或直接对象；错误 `{error:{code,message}}`。
-- CORS 中间件：允许 `http://localhost:5173`、`http://localhost:5174`，方法含 GET/POST/PATCH/DELETE/OPTIONS。
-- 静态资源：`GET /` 返回 `web/index.html`，`/static/` 提供 CSS/JS。
+## 请求处理流程（删除）
+1. 前端选中图书，点击删除并二次确认。
+2. 发起 `DELETE /api/books/{id}`。
+3. Handler 解析并校验 `id`（必须为大于 0 的整数，否则 400 `VALIDATION_ERROR`）。
+4. Service 调用 Repository 删除；不存在返回 404 `NOT_FOUND`。
+5. 成功返回 200/204 与统一 JSON；前端刷新列表。
 
-### Service 层（`internal/service`）
-- 图书业务规则：ID 校验、库存非负、删除存在性校验。
-- 将 Repository 错误映射为业务错误（NotFound / InvalidArgument / Conflict）。
-
-### Repository 层（`internal/repository`）
-- 内存存储：`map[int]*Book` + 自增 ID 计数器 + `sync.RWMutex`。
-- 方法：`List`、`Get`、`Create`、`Delete`、`UpdateStock`。
-
-### 模型（`internal/model`）
-- `Book{ID int, Title string, Author string, Stock int}`。
-
-## 技术选型
-- 语言：Go 1.22。
-- Web：标准库 `net/http`、`encoding/json`。
-- 并发：`sync.RWMutex`。
-- 前端：原生 HTML/CSS/JS，`fetch` 调用 API，无构建步骤。
-
-## 部署与运行
-- 单二进制部署，静态资源通过 `embed.FS` 或相对路径 `web/` 读取（推荐 `embed` 便于打包）。
-- 监听端口 8072，可通过环境变量 `PORT` 覆盖（默认 8072）。
-- 启动命令：`go run .`。
-
-## 关键设计决策
-- 删除接口使用 `DELETE /api/books/{id}`，路径参数为整数 ID。
-- 删除不存在返回 404；ID 非法返回 400。
-- 删除成功返回 204 No Content（或 200 + JSON，二选一，本设计采用 204）。
-- 前端删除后重新 `GET /api/books` 刷新列表。
+## 部署
+- 单进程二进制，监听 `:8072`，同时提供 API 与静态页面。
+- 访问入口：`http://localhost:8072/`；健康检查：`http://localhost:8072/health`。

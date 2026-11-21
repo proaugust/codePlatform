@@ -10,8 +10,9 @@ import (
 type Code string
 
 const (
-	CodeInvalidID        Code = "INVALID_ID"
-	CodeInvalidArgument  Code = "INVALID_ARGUMENT"
+	CodeValidationError  Code = "VALIDATION_ERROR"
+	CodeInvalidID        Code = "VALIDATION_ERROR"
+	CodeInvalidArgument  Code = "VALIDATION_ERROR"
 	CodeNotFound         Code = "NOT_FOUND"
 	CodeMethodNotAllowed Code = "METHOD_NOT_ALLOWED"
 	CodeInternal         Code = "INTERNAL_ERROR"
@@ -32,9 +33,10 @@ func NewError(code Code, status int, format string, args ...any) *Error {
 
 // Sentinel errors for errors.Is comparisons.
 var (
-	ErrInvalidID       = &Error{Code: CodeInvalidID, Message: "invalid id", Status: http.StatusBadRequest}
-	ErrInvalidArgument = &Error{Code: CodeInvalidArgument, Message: "invalid argument", Status: http.StatusBadRequest}
-	ErrNotFound        = &Error{Code: CodeNotFound, Message: "not found", Status: http.StatusNotFound}
+	ErrValidation      = &Error{Code: CodeValidationError, Message: "validation error", Status: http.StatusBadRequest}
+	ErrInvalidID       = &Error{Code: CodeValidationError, Message: "图书 id 必须为大于 0 的整数", Status: http.StatusBadRequest}
+	ErrInvalidArgument = &Error{Code: CodeValidationError, Message: "invalid argument", Status: http.StatusBadRequest}
+	ErrNotFound        = &Error{Code: CodeNotFound, Message: "图书不存在", Status: http.StatusNotFound}
 	ErrInternal        = &Error{Code: CodeInternal, Message: "internal error", Status: http.StatusInternalServerError}
 )
 
@@ -47,12 +49,16 @@ func (e *Error) Is(target error) bool {
 	return e.Code == t.Code
 }
 
+func NewValidation(format string, args ...any) *Error {
+	return NewError(CodeValidationError, http.StatusBadRequest, format, args...)
+}
+
 func NewInvalidID(format string, args ...any) *Error {
-	return NewError(CodeInvalidID, http.StatusBadRequest, format, args...)
+	return NewError(CodeValidationError, http.StatusBadRequest, format, args...)
 }
 
 func NewInvalidArgument(format string, args ...any) *Error {
-	return NewError(CodeInvalidArgument, http.StatusBadRequest, format, args...)
+	return NewError(CodeValidationError, http.StatusBadRequest, format, args...)
 }
 
 func NewNotFound(format string, args ...any) *Error {

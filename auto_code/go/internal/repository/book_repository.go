@@ -15,12 +15,12 @@ var (
 
 type BookRepository struct {
 	mu     sync.RWMutex
-	books  map[int]*model.Book
-	nextID int
+	books  map[int64]*model.Book
+	nextID int64
 }
 
 func NewBookRepository() *BookRepository {
-	return &BookRepository{books: make(map[int]*model.Book), nextID: 1}
+	return &BookRepository{books: make(map[int64]*model.Book), nextID: 1}
 }
 
 func (r *BookRepository) List() []*model.Book {
@@ -35,7 +35,7 @@ func (r *BookRepository) List() []*model.Book {
 	return out
 }
 
-func (r *BookRepository) Get(id int) (*model.Book, error) {
+func (r *BookRepository) Get(id int64) (*model.Book, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	b, ok := r.books[id]
@@ -60,7 +60,7 @@ func (r *BookRepository) Create(b *model.Book) (*model.Book, error) {
 	return &res, nil
 }
 
-func (r *BookRepository) Delete(id int) error {
+func (r *BookRepository) Delete(id int64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.books[id]; !ok {
@@ -70,7 +70,14 @@ func (r *BookRepository) Delete(id int) error {
 	return nil
 }
 
-func (r *BookRepository) UpdateStock(id, delta int) (*model.Book, error) {
+func (r *BookRepository) DeleteByID(id int64) error {
+	if id <= 0 {
+		return ErrInvalidArgument
+	}
+	return r.Delete(id)
+}
+
+func (r *BookRepository) UpdateStock(id int64, delta int) (*model.Book, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	b, ok := r.books[id]
@@ -81,6 +88,21 @@ func (r *BookRepository) UpdateStock(id, delta int) (*model.Book, error) {
 		return nil, ErrInvalidArgument
 	}
 	b.Stock += delta
+	cp := *b
+	return &cp, nil
+}
+
+func (r *BookRepository) SetStock(id int64, stock int) (*model.Book, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	b, ok := r.books[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	if stock < 0 {
+		return nil, ErrInvalidArgument
+	}
+	b.Stock = stock
 	cp := *b
 	return &cp, nil
 }

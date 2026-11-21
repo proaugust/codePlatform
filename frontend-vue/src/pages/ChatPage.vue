@@ -142,12 +142,19 @@ const applying = computed(() => planning.value || executing.value)
           <button type="button" class="btn-secondary" :disabled="!canPlan" @click="onPlan">
             {{ planning && !executing ? '分析中…' : '仅分析计划' }}
           </button>
-          <button type="button" class="btn-secondary" :disabled="!canExecute" @click="onExecute">
+          <button
+            type="button"
+            class="btn-secondary"
+            :disabled="!canExecute"
+            :title="canExecute ? '按当前计划生成/改代码' : '需先「分析计划」；仅聊天确认不会改代码'"
+            @click="onExecute"
+          >
             {{ executing && !planning ? '改代码中…' : '仅执行生成' }}
           </button>
           <span v-if="applying && pipelineNote" class="muted">{{ pipelineNote }}</span>
-          <span v-else-if="readyToPlan" class="muted">可分析</span>
           <span v-else-if="planReady" class="muted">可改代码</span>
+          <span v-else-if="readyToPlan" class="muted">可分析</span>
+          <span v-else class="muted">先分析计划再执行（聊天确认无效）</span>
         </div>
       </div>
 

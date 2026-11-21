@@ -6,6 +6,9 @@ from typing import Any
 from backend.core.config import settings
 from backend.services.codegen import SUPPORTED_LANGS
 
+# 文件树可浏览：后端 java/go + 同级共用 frontend
+TREE_TARGETS = frozenset({"java", "go", "frontend"})
+
 SKIP_DIR_NAMES = frozenset(
     {
         "node_modules",
@@ -63,17 +66,23 @@ class ProjectFilesError(RuntimeError):
     pass
 
 
-def _root(lang: str) -> Path:
-    lang = lang.lower().strip()
-    if lang not in SUPPORTED_LANGS:
-        raise ProjectFilesError(f"不支持的语言: {lang}")
-    root = settings.auto_code_dir(lang)
+def _root(target: str) -> Path:
+    target = target.lower().strip()
+    if target == "frontend":
+        from backend.services.frontend_codegen import ensure_shared_frontend
+
+        root = ensure_shared_frontend()
+        root.mkdir(parents=True, exist_ok=True)
+        return root.resolve()
+    if target not in SUPPORTED_LANGS:
+        raise ProjectFilesError(f"不支持的浏览目标: {target}（可选: java, go, frontend）")
+    root = settings.auto_code_dir(target)
     root.mkdir(parents=True, exist_ok=True)
     return root.resolve()
 
 
-def resolve_under_root(lang: str, rel_path: str) -> Path:
-    root = _root(lang)
+def resolve_under_root(target: str, rel_path: str) -> Path:
+    root = _root(target)
     raw = (rel_path or "").replace("\\", "/").strip().lstrip("/")
     if not raw or raw == ".":
         return root
@@ -124,17 +133,23 @@ def _build_tree(dir_path: Path, root: Path) -> list[dict[str, Any]]:
     return nodes
 
 
-def list_tree(lang: str) -> dict[str, Any]:
-    root = _root(lang)
+def list_tree(target: str) -> dict[str, Any]:
+    target = target.lower().strip()
+    if target not in TREE_TARGETS:
+        raise ProjectFilesError(f"不支持的浏览目标: {target}（可选: java, go, frontend）")
+    root = _root(target)
     return {
-        "lang": lang.lower().strip(),
+        "lang": target,
         "root": str(root),
         "tree": _build_tree(root, root) if root.is_dir() else [],
     }
 
 
-def read_file(lang: str, rel_path: str) -> dict[str, Any]:
-    path = resolve_under_root(lang, rel_path)
+def read_file(target: str, rel_path: str) -> dict[str, Any]:
+    target = target.lower().strip()
+    if target not in TREE_TARGETS:
+        raise ProjectFilesError(f"不支持的浏览目标: {target}（可选: java, go, frontend）")
+    path = resolve_under_root(target, rel_path)
     if not path.is_file():
         raise ProjectFilesError(f"文件不存在: {rel_path}")
     if not _is_probably_text(path):
@@ -147,8 +162,8 @@ def read_file(lang: str, rel_path: str) -> dict[str, Any]:
     except UnicodeDecodeError:
         text = raw.decode("utf-8", errors="replace")
     return {
-        "lang": lang.lower().strip(),
-        "path": path.relative_to(_root(lang)).as_posix(),
+        "lang": target,
+        "path": path.relative_to(_root(target)).as_posix(),
         "content": text,
         "size": size,
         "truncated": truncated,

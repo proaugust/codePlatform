@@ -74,7 +74,12 @@ from backend.services.platform_prefs import (
     resolve_llm_config,
     write_prefs,
 )
-from backend.services.project_files import ProjectFilesError, list_tree, read_file as read_project_file
+from backend.services.project_files import (
+    TREE_TARGETS,
+    ProjectFilesError,
+    list_tree,
+    read_file as read_project_file,
+)
 from backend.services.runtime import (
     ProjectRuntimeError,
     clear_runtime_log,
@@ -105,6 +110,16 @@ def _normalize_target(target: str) -> str:
     t = target.lower().strip()
     if t not in SUPPORTED_LANGS:
         raise HTTPException(status_code=400, detail=f"不支持的 target: {target}，可选: java, go")
+    return t
+
+
+def _normalize_tree_target(target: str) -> str:
+    t = target.lower().strip()
+    if t not in TREE_TARGETS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的浏览目标: {target}，可选: java, go, frontend",
+        )
     return t
 
 
@@ -309,7 +324,7 @@ async def elicit_delete_session_route(target: str, session_id: str) -> ElicitDel
 
 @router.get("/{target}/tree", response_model=ProjectTreeResponse)
 async def project_tree(target: str) -> ProjectTreeResponse:
-    target = _normalize_target(target)
+    target = _normalize_tree_target(target)
     try:
         result = list_tree(target)
     except ProjectFilesError as e:
@@ -324,9 +339,9 @@ async def project_tree(target: str) -> ProjectTreeResponse:
 @router.get("/{target}/file", response_model=ProjectFileResponse)
 async def project_file(
     target: str,
-    path: str = Query(..., min_length=1, description="相对 auto_code/{lang} 的路径"),
+    path: str = Query(..., min_length=1, description="相对 auto_code/{java|go|frontend} 的路径"),
 ) -> ProjectFileResponse:
-    target = _normalize_target(target)
+    target = _normalize_tree_target(target)
     try:
         result = read_project_file(target, path)
     except ProjectFilesError as e:
