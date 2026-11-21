@@ -437,7 +437,18 @@ async function resolveTargetFromMeta() {
     const data = await r.json()
     if (r.ok) {
       if (Array.isArray(data.langs) && data.langs.length) {
-        langMetas.value = data.langs.filter((m: LangMeta) => isLang(m.lang))
+        // 与本地 FALLBACK 合并：旧后端 meta 可能仍把 go.has_frontend 标 false
+        langMetas.value = data.langs
+          .filter((m: LangMeta) => isLang(m.lang))
+          .map((m: LangMeta) => {
+            const fb = FALLBACK_LANGS.find((x) => x.lang === m.lang)
+            return {
+              lang: m.lang,
+              backend_port: m.backend_port || fb?.backend_port || 8070,
+              frontend_port: m.frontend_port ?? fb?.frontend_port ?? null,
+              has_frontend: Boolean(m.has_frontend || fb?.has_frontend),
+            }
+          })
       }
       if (isLang(data.default_lang)) defaultLang = data.default_lang
     }

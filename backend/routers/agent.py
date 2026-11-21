@@ -56,7 +56,12 @@ from backend.services.agents.elicitor import (
 )
 from backend.services.analyze import AnalyzeError, analyze_requirements, read_docs
 from backend.services.codegen import SUPPORTED_LANGS, CodegenError, project_status
-from backend.services.frontend_codegen import FRONTEND_PORT, FrontendCodegenError, start_frontend_dev
+from backend.services.frontend_codegen import (
+    FRONTEND_LANGS,
+    FRONTEND_PORT,
+    FrontendCodegenError,
+    start_frontend_dev,
+)
 from backend.services.orchestrator import OrchestratorError, confirm_plan, get_run_status, run_generate
 from backend.services.platform_prefs import (
     MAX_MAX_TURNS,
@@ -80,10 +85,6 @@ from backend.services.runtime import (
 )
 
 router = APIRouter(prefix="/agent", tags=["agent"])
-
-# java / go 产物均可配套 Vue 前端
-_LANGS_WITH_FRONTEND = frozenset({"java", "go"})
-
 
 class AnalyzeBody(BaseModel):
     spec: str = Field(..., min_length=1, description="用户原始需求")
@@ -113,8 +114,8 @@ async def agent_meta() -> AgentMetaResponse:
         AgentLangMeta(
             lang=lang,
             backend_port=port,
-            frontend_port=FRONTEND_PORT if lang in _LANGS_WITH_FRONTEND else None,
-            has_frontend=lang in _LANGS_WITH_FRONTEND,
+            frontend_port=FRONTEND_PORT if lang in FRONTEND_LANGS else None,
+            has_frontend=lang in FRONTEND_LANGS,
         )
         for lang, port in LANG_PORTS.items()
     ]
