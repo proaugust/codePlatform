@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -16,19 +17,85 @@ from backend.services.llm import LlmError, chat_completion_json
 
 logger = logging.getLogger(__name__)
 
-# java/go 产物均可配套 Vue；Agent 控制台占 5173/5174，业务前端共用 5175
+# java/go 共用一份 Vue；Agent 控制台占 5173/5174，业务前端固定 5175
 FRONTEND_LANGS = frozenset({"java", "go"})
 FRONTEND_PORT = 5175
 FRONTEND_DIR = "frontend"
 RUN_BAT_NAME = "run_frontend.bat"
+BACKEND_TARGET_FILE = ".backend_target"
+
+_PROXY_TARGET_RE = re.compile(
+    r"(target:\s*['\"])http://127\.0\.0\.1:\d+(['\"])",
+    re.IGNORECASE,
+)
 
 
 class FrontendCodegenError(RuntimeError):
     pass
 
 
-def frontend_root(lang: str) -> Path:
-    return settings.auto_code_dir(lang) / FRONTEND_DIR
+def frontend_root(_lang: str | None = None) -> Path:
+    """业务前端目录：auto_code/frontend（与 java、go 同级，各语言共用）。"""
+    return settings.auto_code_root / FRONTEND_DIR
+
+
+def _legacy_frontend_roots() -> list[Path]:
+    return [settings.auto_code_dir(lang) / FRONTEND_DIR for lang in ("java", "go")]
+
+
+def _dir_nonempty(path: Path) -> bool:
+    return path.is_dir() and any(path.iterdir())
+
+
+def ensure_shared_frontend() -> Path:
+    """确保共用 frontend 存在；若仅有 java/go 下旧目录则迁到同级。"""
+    root = frontend_root()
+    if _dir_nonempty(root):
+        return root
+    for legacy in _legacy_frontend_roots():
+        if not _dir_nonempty(legacy):
+            continue
+        root.parent.mkdir(parents=True, exist_ok=True)
+        if root.exists():
+            shutil.rmtree(root)
+        shutil.move(str(legacy), str(root))
+        logger.info("已迁移旧前端目录 %s -> %s", legacy, root)
+        return root
+    return root
+
+
+def _read_backend_target(root: Path) -> int | None:
+    path = root / BACKEND_TARGET_FILE
+    if not path.is_file():
+        return None
+    try:
+        raw = path.read_text(encoding="utf-8").strip().splitlines()
+        return int(raw[0].strip()) if raw else None
+    except (OSError, ValueError):
+        return None
+
+
+def _write_backend_target(root: Path, backend_port: int, lang: str) -> None:
+    path = root / BACKEND_TARGET_FILE
+    path.write_text(f"{backend_port}\n{lang}\n", encoding="utf-8", newline="\n")
+
+
+def ensure_vite_proxy(root: Path, backend_port: int) -> bool:
+    """把 vite.config.ts 的 /api、/health 代理改到指定后端端口；返回是否改写了文件。"""
+    vite = root / "vite.config.ts"
+    if not vite.is_file():
+        vite = root / "vite.config.js"
+    if not vite.is_file():
+        return False
+    text = vite.read_text(encoding="utf-8")
+    target = f"http://127.0.0.1:{backend_port}"
+    new_text, n = _PROXY_TARGET_RE.subn(rf"\g<1>{target}\g<2>", text)
+    if n == 0:
+        return False
+    if new_text == text:
+        return False
+    vite.write_text(new_text, encoding="utf-8", newline="\n")
+    return True
 
 
 def _system_prompt(*, backend_port: int, frontend_port: int, incremental: bool) -> str:
@@ -191,9 +258,11 @@ def _write_files(root: Path, files: list[dict[str, Any]]) -> list[str]:
 
 
 def _write_readme(root: Path, *, backend_port: int, frontend_port: int) -> str:
+    ports = ", ".join(f"{k}={v}" for k, v in LANG_PORTS.items())
     body = (
         "# Auto-generated Vue Frontend\n\n"
-        "无登录业务前端，通过 Vite 代理访问后端 API。\n\n"
+        "java / go 共用的无登录业务前端，通过 Vite 代理访问当前选中的后端。\n\n"
+        f"目录：`auto_code/{FRONTEND_DIR}`（与 java、go 同级）。\n\n"
         "## 启动\n\n"
         f"- 双击 `{RUN_BAT_NAME}`，或在本目录执行：\n\n"
         "```bash\n"
@@ -201,8 +270,9 @@ def _write_readme(root: Path, *, backend_port: int, frontend_port: int) -> str:
         f"npm run dev -- --host 127.0.0.1 --port {frontend_port}\n"
         "```\n\n"
         f"- 前端: http://127.0.0.1:{frontend_port}\n"
-        f"- 后端: http://127.0.0.1:{backend_port}\n"
-        "- 请先启动对应语言后端，再启动本前端。\n"
+        f"- 当前代理后端: http://127.0.0.1:{backend_port}\n"
+        f"- 后端端口: {ports}\n"
+        "- 请先启动对应语言后端；控制台「启动前端」会按当前语言改写代理目标。\n"
     )
     path = root / "README.md"
     path.write_text(body, encoding="utf-8", newline="\n")
@@ -334,34 +404,50 @@ def _wait_frontend_ready(
 
 
 def start_frontend_dev(lang: str, *, capture_log: bool = True) -> dict[str, Any]:
-    """启动业务 Vue；默认把输出写入 auto_code/{lang}/logs/frontend.log 供页面展示。"""
+    """启动共用业务 Vue；日志写入 auto_code/{lang}/logs/frontend.log。"""
     lang = lang.lower().strip()
     if lang not in FRONTEND_LANGS:
         raise FrontendCodegenError(f"不支持启动业务前端的语言: {lang}（可选: java, go）")
 
-    root = frontend_root(lang)
+    backend_port = LANG_PORTS[lang]
+    root = ensure_shared_frontend()
     bat = root / RUN_BAT_NAME
-    if not root.is_dir() or not any(root.iterdir()):
+    if not _dir_nonempty(root):
         raise FrontendCodegenError(f"尚未生成业务前端，请先生成代码: {root}")
     if not bat.is_file():
         _write_run_bat(root, frontend_port=FRONTEND_PORT)
 
+    proxy_changed = ensure_vite_proxy(root, backend_port)
+    _write_readme(root, backend_port=backend_port, frontend_port=FRONTEND_PORT)
+
     url = frontend_url(FRONTEND_PORT)
     already = _port_open("127.0.0.1", FRONTEND_PORT)
+    current_target = _read_backend_target(root)
     log_file = settings.auto_code_dir(lang) / "logs" / "frontend.log"
-    if already:
+    if already and current_target == backend_port and not proxy_changed:
         return {
             "ok": True,
             "started": False,
             "already_running": True,
             "lang": lang,
             "port": FRONTEND_PORT,
+            "backend_port": backend_port,
             "url": url,
             "bat": str(bat),
+            "root": str(root),
             "log": str(log_file),
             "listening": True,
-            "message": f"业务前端已在运行，可直接打开 {url}",
+            "message": f"业务前端已在运行（代理 {lang}:{backend_port}），可直接打开 {url}",
         }
+
+    if already:
+        from backend.services.runtime import kill_port
+
+        killed = kill_port(FRONTEND_PORT)
+        _append_frontend_log(
+            log_file,
+            f"\n===== RESTART for {lang} backend={backend_port} killed={killed} =====\n",
+        )
 
     log_file.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -373,7 +459,10 @@ def start_frontend_dev(lang: str, *, capture_log: bool = True) -> dict[str, Any]
     npm = "npm.cmd" if sys.platform.startswith("win") else "npm"
     cmd = [npm, "run", "dev", "--", "--host", "127.0.0.1", "--port", str(FRONTEND_PORT)]
     if capture_log:
-        _append_frontend_log(log_file, f"\n===== START {' '.join(cmd)} =====\n")
+        _append_frontend_log(
+            log_file,
+            f"\n===== START {' '.join(cmd)} backend={backend_port} lang={lang} =====\n",
+        )
         # 二进制追加：兼容 npm/cmd 的系统编码输出，避免中文错误被 utf-8 读丢
         handle: IO[bytes] = log_file.open("ab")
         env = os.environ.copy()
@@ -392,7 +481,10 @@ def start_frontend_dev(lang: str, *, capture_log: bool = True) -> dict[str, Any]
         proc = subprocess.Popen(cmd, **kwargs)
         ok, msg = _wait_frontend_ready(proc, port=FRONTEND_PORT, log_file=log_file)
         listening = _port_open("127.0.0.1", FRONTEND_PORT)
-        if not ok:
+        if ok:
+            _write_backend_target(root, backend_port, lang)
+            msg = f"{msg}（代理 {lang} → :{backend_port}）"
+        else:
             _append_frontend_log(log_file, f"===== START FAILED =====\n{msg}\n")
         return {
             "ok": ok,
@@ -400,8 +492,10 @@ def start_frontend_dev(lang: str, *, capture_log: bool = True) -> dict[str, Any]
             "already_running": False,
             "lang": lang,
             "port": FRONTEND_PORT,
+            "backend_port": backend_port,
             "url": url,
             "bat": str(bat),
+            "root": str(root),
             "log": str(log_file),
             "pid": proc.pid,
             "listening": listening,
@@ -422,6 +516,7 @@ def start_frontend_dev(lang: str, *, capture_log: bool = True) -> dict[str, Any]
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
+    _write_backend_target(root, backend_port, lang)
 
     return {
         "ok": True,
@@ -429,10 +524,12 @@ def start_frontend_dev(lang: str, *, capture_log: bool = True) -> dict[str, Any]
         "already_running": False,
         "lang": lang,
         "port": FRONTEND_PORT,
+        "backend_port": backend_port,
         "url": url,
         "bat": str(bat),
+        "root": str(root),
         "log": str(log_file),
-        "message": f"已启动 {RUN_BAT_NAME}，稍后打开 {url}",
+        "message": f"已启动 {RUN_BAT_NAME}（代理 {lang} → :{backend_port}），稍后打开 {url}",
     }
 
 
@@ -454,7 +551,7 @@ async def generate_frontend(
 
     api_port = backend_port if backend_port is not None else LANG_PORTS[lang]
     fe_port = FRONTEND_PORT
-    root = frontend_root(lang)
+    root = ensure_shared_frontend()
 
     try:
         doc_spec = load_docs_as_spec(lang)
@@ -545,12 +642,16 @@ async def generate_frontend(
         written.append(_write_readme(root, backend_port=api_port, frontend_port=fe_port))
         written.append(_write_run_bat(root, frontend_port=fe_port))
 
+    ensure_vite_proxy(root, api_port)
+    _write_backend_target(root, api_port, lang)
+
     logger.info(
-        "前端生成完成 lang=%s mode=%s files=%d port=%s",
+        "前端生成完成 lang=%s mode=%s files=%d port=%s root=%s",
         lang,
         "incremental" if incremental else "greenfield",
         len(written),
         fe_port,
+        root,
     )
     return {
         "ok": True,
@@ -571,6 +672,8 @@ __all__ = [
     "FRONTEND_PORT",
     "RUN_BAT_NAME",
     "FrontendCodegenError",
+    "ensure_shared_frontend",
+    "ensure_vite_proxy",
     "frontend_root",
     "frontend_url",
     "generate_frontend",

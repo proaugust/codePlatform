@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>图书管理</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background: #f5f6f8; color: #222; }
+  header { background: #2d6cdf; color: #fff; padding: 16px 24px; }
+  header h1 { margin: 0; font-size: 20px; }
+  main { max-width: 960px; margin: 24px auto; padding: 0 16px; }
+  .card { background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.08); padding: 16px; margin-bottom: 20px; }
+  .card h2 { margin: 0 0 12px; font-size: 16px; }
+  form { display: flex; gap: 8px; flex-wrap: wrap; }
+  form input { padding: 8px 10px; border: 1px solid #ccd; border-radius: 6px; font-size: 14px; }
+  form input[type=number] { width: 100px; }
+  button { padding: 8px 14px; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; }
+  .btn-primary { background: #2d6cdf; color: #fff; }
+  .btn-primary:hover { background: #2459b8; }
+  .btn-danger { background: #e5484d; color: #fff; }
+  .btn-danger:hover { background: #c93a3f; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid #eef0f3; font-size: 14px; }
+  th { color: #667; font-weight: 600; }
+  .empty { color: #889; padding: 16px 0; }
+  #message { margin-bottom: 12px; padding: 10px 12px; border-radius: 6px; font-size: 14px; display: none; }
+  #message.error { display: block; background: #fdecec; color: #b42318; }
+  #message.success { display: block; background: #e8f6ee; color: #1a7f45; }
+  .stock-controls { display: inline-flex; gap: 4px; align-items: center; }
+  .stock-controls button { padding: 4px 8px; font-size: 12px; background: #eef1f6; color: #334; }
+  .stock-controls button:hover { background: #dfe4ee; }
+</style>
+</head>
+<body>
+<header><h1>图书管理</h1></header>
+<main>
+  <div id="message"></div>
+
+  <div class="card">
+    <h2>新增图书</h2>
+    <form id="create-form">
+      <input id="title" type="text" placeholder="标题" required maxlength="200">
+      <input id="author" type="text" placeholder="作者" required maxlength="100">
+      <input id="stock" type="number" placeholder="库存" min="0" value="0" required>
+      <button class="btn-primary" type="submit">创建</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>图书列表</h2>
+    <table>
+      <thead>
+        <tr><th>ID</th><th>标题</th><th>作者</th><th>库存</th><th>操作</th></tr>
+      </thead>
+      <tbody id="book-rows"></tbody>
+    </table>
+    <div id="empty" class="empty" style="display:none">暂无图书</div>
+  </div>
+</main>
+
+<script>
+(function () {
+  var API = '/api/books';
+  var rows = document.getElementById('book-rows');
+  var empty = document.getElementById('empty');
+  var msg = document.getElementById('message');
+
+  function showMessage(text, type) {
+    msg.textContent = text;
+    msg.className = type || '';
+    if (!type) msg.style.display = 'none';
+    if (type) {
+      clearTimeout(showMessage._t);
+      showMessage._t = setTimeout(function () { msg.className = ''; msg.textContent = ''; }, 4000);
+    }
+  }
+
+  function request(method, url, body) {
+    var opts = { method: method, headers: {} };
+    if (body !== undefined) {
+      opts.headers['Content-Type'] = 'application/json';
+      opts.body = JSON.stringify(body);
+    }
+    return fetch(url, opts).then(function (res) {
+      if (res.status === 204) return null;
+      return res.text().then(function (text) {
+        var data = null;
+        if (text) { try { data = JSON.parse(text); } catch (e) { data = null; } }
+        if (!res.ok) {
+          var err = (data && data.error) || {};
+          var e = new Error(err.message || ('请求失败 (' + res.status + ')'));
+          e.code = err.code || 'ERROR';
+          e.status = res.status;
+          throw e;
+        }
+        return data;
+      });
+    });
+  }
+
+  function render(books) {
+    rows.innerHTML = '';
+    if (!books || books.length === 0) {
+      empty.style.display = 'block';
+      return;
+    }
+    empty.style.display = 'none';
+    books.forEach(function (b) {
+      var tr = document.createElement('tr');
+
+      var tdId = document.createElement('td');
+      tdId.textContent = b.id;
+      tr.appendChild(tdId);
+
+      var tdTitle = document.createElement('td');
+      tdTitle.textContent = b.title;
+      tr.appendChild(tdTitle);
+
+      var tdAuthor = document.createElement('td');
+      tdAuthor.textContent = b.author;
+      tr.appendChild(tdAuthor);
+
+      var tdStock = document.createElement('td');
+      var wrap = document.createElement('span');
+      wrap.className = 'stock-controls';
+      var minus = document.createElement('button');
+      minus.type = 'button';
+      minus.textContent = '-';
+      minus.addEventListener('click', function () { adjustStock(b.id, -1); });
+      var val = document.createElement('span');
+      val.textContent = b.stock;
+      var plus = document.createElement('button');
+      plus.type = 'button';
+      plus.textContent = '+';
+      plus.addEventListener('click', function () { adjustStock(b.id, 1); });
+      wrap.appendChild(minus);
+      wrap.appendChild(val);
+      wrap.appendChild(plus);
+      tdStock.appendChild(wrap);
+      tr.appendChild(tdStock);
+
+      var tdOps = document.createElement('td');
+      var del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'btn-danger';
+      del.textContent = '删除';
+      del.addEventListener('click', function () { removeBook(b); });
+      tdOps.appendChild(del);
+      tr.appendChild(tdOps);
+
+      rows.appendChild(tr);
+    });
+  }
+
+  function loadBooks() {
+    return request('GET', API).then(function (data) {
+      render((data && data.data) || []);
+    }).catch(function (e) {
+      showMessage('加载列表失败：' + e.message, 'error');
+    });
+  }
+
+  function removeBook(book) {
+    if (!window.confirm('确定删除《' + book.title + '》(ID: ' + book.id + ') 吗？')) return;
+    request('DELETE', API + '/' + book.id).then(function () {
+      showMessage('已删除《' + book.title + '》', 'success');
+      return loadBooks();
+    }).catch(function (e) {
+      showMessage('删除失败：' + e.message, 'error');
+      return loadBooks();
+    });
+  }
+
+  function adjustStock(id, delta) {
+    request('PATCH', API + '/' + id + '/stock', { delta: delta }).then(function () {
+      return loadBooks();
+    }).catch(function (e) {
+      showMessage('调整库存失败：' + e.message, 'error');
+    });
+  }
+
+  document.getElementById('create-form').addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    var title = document.getElementById('title').value.trim();
+    var author = document.getElementById('author').value.trim();
+    var stock = parseInt(document.getElementById('stock').value, 10);
+    if (!title || !author) { showMessage('标题和作者不能为空', 'error'); return; }
+    if (isNaN(stock) || stock < 0) { showMessage('库存必须为非负整数', 'error'); return; }
+    request('POST', API, { title: title, author: author, stock: stock }).then(function () {
+      document.getElementById('create-form').reset();
+      document.getElementById('stock').value = '0';
+      showMessage('创建成功', 'success');
+      return loadBooks();
+    }).catch(function (e) {
+      showMessage('创建失败：' + e.message, 'error');
+    });
+  });
+
+  loadBooks();
+})();
+</script>
+</body>
+</html>

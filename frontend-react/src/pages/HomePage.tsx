@@ -160,7 +160,7 @@ export default function HomePage() {
           </a>
           <span className="muted">
             {' '}
-            （目录 <code>auto_code/java/frontend</code>
+            （目录 <code>auto_code/frontend</code>
             {status?.frontend_exists ? ' · 已生成' : ' · 生成代码后可用'}）
           </span>
         </p>
@@ -191,8 +191,8 @@ export default function HomePage() {
           disabled={startingFe || !canStartFrontend}
           title={
             canStartFrontend
-              ? '调用 run_frontend.bat 启动 auto_code/java/frontend'
-              : '请先生成 Java 代码（会同步生成 Vue 业务前端）'
+              ? '启动 auto_code/frontend（java/go 共用）'
+              : '请先生成代码（会同步生成 Vue 业务前端）'
           }
         >
           {startingFe ? '启动中…' : '启动业务前端 (5175)'}
@@ -214,7 +214,7 @@ export default function HomePage() {
       </div>
 
       {!canStartFrontend && (
-        <p className="muted">提示：「启动业务前端」需先点「生成代码」（会写出 auto_code/java/frontend）。</p>
+        <p className="muted">提示：「启动业务前端」需先点「生成代码」（会写出 auto_code/frontend）。</p>
       )}
       {feMsg && <p className="muted">{feMsg}</p>}
       {error && <pre className="error">{error}</pre>}

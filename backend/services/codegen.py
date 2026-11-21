@@ -443,9 +443,9 @@ def project_status(lang: str) -> dict[str, Any]:
     file_count = 0
     if root.is_dir():
         file_count = sum(1 for p in root.rglob("*") if p.is_file())
-    from backend.services.frontend_codegen import FRONTEND_PORT, frontend_root
+    from backend.services.frontend_codegen import FRONTEND_PORT, ensure_shared_frontend
 
-    fe_root = frontend_root(lang)
+    fe_root = ensure_shared_frontend()
     fe_exists = fe_root.is_dir() and any(fe_root.iterdir())
     return {
         "lang": lang,

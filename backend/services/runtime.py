@@ -13,7 +13,7 @@ from backend.core.config import LANG_PORTS, settings
 from backend.services.frontend_codegen import (
     FRONTEND_PORT,
     FrontendCodegenError,
-    frontend_root,
+    ensure_shared_frontend,
     start_frontend_dev,
 )
 
@@ -460,7 +460,7 @@ def restart_project(lang: str, *, with_frontend: bool = True) -> dict[str, Any]:
             }
         )
         if with_frontend:
-            fe = frontend_root(lang)
+            fe = ensure_shared_frontend()
             if fe.is_dir() and any(fe.iterdir()):
                 fe_killed = kill_port(FRONTEND_PORT)
                 try:
@@ -501,7 +501,7 @@ def restart_project(lang: str, *, with_frontend: bool = True) -> dict[str, Any]:
             }
         )
         if with_frontend:
-            fe = frontend_root(lang)
+            fe = ensure_shared_frontend()
             if fe.is_dir() and any(fe.iterdir()):
                 fe_killed = kill_port(FRONTEND_PORT)
                 try:

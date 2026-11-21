@@ -149,8 +149,11 @@ async def run_planner(lang: str) -> dict[str, Any]:
     if not isinstance(data.get("tasks"), list) or not data["tasks"]:
         data = _fallback_plan(lang, spec, incremental=incremental)
 
-    tasks = data.get("tasks") if isinstance(data.get("tasks"), list) else []
-    apis = data.get("apis") if isinstance(data.get("apis"), list) else []
+    # 先取出再 isinstance，避免 data.get 调用两次导致 Pyright 无法收窄（报 OptionalIterable）
+    raw_tasks = data.get("tasks")
+    raw_apis = data.get("apis")
+    tasks: list[Any] = raw_tasks if isinstance(raw_tasks, list) else []
+    apis: list[Any] = raw_apis if isinstance(raw_apis, list) else []
     # java：接口有写操作但 tasks 未含 frontend/ 时补一条，避免只改后端
     if lang == "java":
         write_apis = [
@@ -164,7 +167,8 @@ async def run_planner(lang: str) -> dict[str, Any]:
             for t in tasks
         )
         if write_apis and not has_fe_task:
-            tasks = list(tasks) + [
+            tasks = [
+                *tasks,
                 {
                     "id": f"T{len(tasks) + 1}",
                     "title": "配套 Vue 前端：暴露新增/变更接口操作",
@@ -178,7 +182,7 @@ async def run_planner(lang: str) -> dict[str, Any]:
                         "前端可选择目标并调用对应写接口（含 DELETE 若存在）",
                         "错误展示后端 code/message",
                     ],
-                }
+                },
             ]
 
     plan = {

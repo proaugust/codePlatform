@@ -2,27 +2,31 @@
   "lang": "go",
   "mode": "incremental",
   "approved": true,
-  "summary": "在现有 Go net/http 图书服务上增量完善「前端可选择图书并调用后端删除」能力：确保 DELETE /api/books/{id} 可用、前端静态页面支持选择与删除并刷新列表、后端同端口 8080 托管静态页面，保留 GET /health。",
+  "summary": "在现有 Go net/http 图书服务上增量完善删除图书闭环：新增/对齐 DELETE /api/books/{id}（成功 204、不存在 404 NOT_FOUND、非法 ID 400），前端静态页面可选择图书并二次确认后调用删除并刷新列表，后端在 8072 端口托管静态页面（访问 http://localhost:8072/），并保留 GET /health。",
   "modules": [
     {
-      "name": "main.go 路由与静态托管",
-      "responsibility": "注册 GET /health、图书 CRUD 路由与 DELETE /api/books/{id}，CORS 中间件，/ 托管 static 静态页面，默认监听 8080（PORT 可覆盖）"
+      "name": "main.go",
+      "responsibility": "进程入口：注册路由（/health、/api/books 系列、静态资源）、CORS 中间件、监听 8072（PORT 可覆盖）"
     },
     {
-      "name": "handler 层",
-      "responsibility": "解析路径参数 id、校验整数、调用 service 删除、统一 JSON 成功/错误响应与状态码映射"
+      "name": "internal/handler",
+      "responsibility": "HTTP 层：解析路径参数与 JSON 请求体，调用 Service，统一 JSON 成功/错误响应封装，静态页面与 /static/ 资源托管"
     },
     {
-      "name": "service 层",
-      "responsibility": "图书业务逻辑，含 DeleteBook(id) 存在性校验与删除，ID 生成"
+      "name": "internal/service",
+      "responsibility": "业务层：ID 校验、图书存在性校验、库存非负校验，将仓储错误映射为 NOT_FOUND/INVALID_ARGUMENT 等业务错误"
     },
     {
-      "name": "repository 层",
-      "responsibility": "内存存储 map/slice + sync.RWMutex，删除加写锁保证并发安全"
+      "name": "internal/repository",
+      "responsibility": "内存存储层：map[int]*Book + 自增 ID + sync.RWMutex，提供 List/Get/Create/Delete/UpdateStock"
     },
     {
-      "name": "static 前端页面",
-      "responsibility": "index.html/app.js/style.css 展示图书列表、单选选择、删除按钮与二次确认，调用 DELETE 后刷新列表"
+      "name": "internal/model",
+      "responsibility": "领域模型 Book{ID,Title,Author,Stock}"
+    },
+    {
+      "name": "web",
+      "responsibility": "无构建步骤的静态前端：图书列表展示、每行删除按钮、二次确认弹窗、调用 DELETE 后重新拉取列表刷新、错误提示"
     }
   ],
   "apis": [
@@ -34,114 +38,151 @@
     {
       "method": "GET",
       "path": "/api/books",
-      "description": "图书列表，返回 JSON 数组"
+      "description": "图书列表，返回 200 与 {\"data\":[...]}（按 ID 升序）"
     },
     {
       "method": "POST",
       "path": "/api/books",
-      "description": "新增图书，请求 title/author/stock，返回 201 与图书对象"
+      "description": "创建图书，请求体 {title,author,stock}，成功 201 返回 {\"data\":{...}}，参数非法 400 INVALID_ARGUMENT"
     },
     {
       "method": "GET",
       "path": "/api/books/{id}",
-      "description": "图书详情，不存在返回 404 NOT_FOUND"
+      "description": "图书详情，成功 200 {\"data\":{...}}；ID 非整数 400 INVALID_ID；不存在 404 NOT_FOUND"
     },
     {
       "method": "DELETE",
       "path": "/api/books/{id}",
-      "description": "按整数 ID 删除图书，成功返回 200 {\"deleted\":true,\"id\":N}；ID 非法 400 INVALID_ID；不存在 404 NOT_FOUND"
+      "description": "删除图书（用户硬需求）：按整数 ID 删除，成功 204 无响应体；ID 非整数 400 INVALID_ID；不存在 404 NOT_FOUND（错误结构含 code=NOT_FOUND）"
     },
     {
       "method": "PATCH",
       "path": "/api/books/{id}/stock",
-      "description": "库存调整，请求 delta，返回更新后的图书对象"
+      "description": "调整库存，请求体 {delta}，成功 200 返回更新后图书；库存不足或参数非法 400 INVALID_ARGUMENT；不存在 404 NOT_FOUND"
     },
     {
       "method": "GET",
       "path": "/",
-      "description": "托管静态页面 index.html，前端通过 fetch 调用上述 API"
+      "description": "返回静态页面 index.html（图书列表 + 删除按钮），前端访问地址 http://localhost:8072/"
+    },
+    {
+      "method": "GET",
+      "path": "/static/*",
+      "description": "返回前端 CSS/JS 静态资源"
     }
   ],
   "data_model": [
     {
-      "name": "books（内存存储）",
+      "name": "books（内存 map[int]*Book）",
       "fields": [
-        "id int 自增主键",
-        "title string 非空",
-        "author string 非空",
-        "stock int >=0",
-        "created_at time.Time"
+        "id：int，主键，自增，>0",
+        "title：string，非空，长度 1~200",
+        "author：string，非空，长度 1~100",
+        "stock：int，>=0"
       ]
     }
   ],
   "tasks": [
     {
       "id": "T1",
-      "title": "核对并完善 repository/service 删除逻辑",
+      "title": "补齐内存仓储与领域模型（含并发安全删除）",
       "deps": [],
       "files": [
-        "main.go"
+        "internal/model/book.go",
+        "internal/repository/book_repository.go"
       ],
       "acceptance": [
-        "DeleteBook(id) 在写锁内删除，存在返回 nil，不存在返回未找到错误",
-        "并发删除/读取无数据竞争（go test -race 或 go vet 通过）",
-        "ID 自增计数器在写锁内递增，删除后不复用"
+        "Book 结构含 ID/Title/Author/Stock 字段",
+        "仓储使用 map[int]*Book + nextID 自增 + sync.RWMutex",
+        "List 按 ID 升序返回；Get 不存在返回 NotFound 错误",
+        "Delete(id) 存在则删除并返回 nil，不存在返回 NotFound 错误",
+        "UpdateStock 保证 stock 不为负，否则返回业务错误"
       ]
     },
     {
       "id": "T2",
-      "title": "完善 DELETE /api/books/{id} handler 与统一错误响应",
+      "title": "实现 Service 业务校验与错误映射",
       "deps": [
         "T1"
       ],
       "files": [
-        "main.go"
+        "internal/service/book_service.go",
+        "internal/service/errors.go"
       ],
       "acceptance": [
-        "DELETE /api/books/{id} 删除已存在图书返回 200 且 body 含 deleted=true 与 id",
-        "再次 GET /api/books/{id} 返回 404",
-        "不存在 ID 返回 404 且错误结构含 code=NOT_FOUND",
-        "非整数 ID 返回 400 且 code=INVALID_ID"
+        "DeleteBook(id) 对不存在 ID 返回 NotFound 业务错误，对合法 ID 返回 nil",
+        "CreateBook 校验 title/author 非空、stock>=0，非法返回 InvalidArgument",
+        "UpdateStock 库存不足返回 InvalidArgument",
+        "业务错误可映射为 HTTP 状态码与错误码（NOT_FOUND/INVALID_ARGUMENT）"
       ]
     },
     {
       "id": "T3",
-      "title": "前端静态页面支持选择与删除",
+      "title": "实现 Handler 与路由：删除接口、统一错误响应、CORS、静态托管",
       "deps": [
         "T2"
       ],
       "files": [
-        "static/index.html",
-        "static/app.js",
-        "static/style.css"
+        "internal/handler/book_handler.go",
+        "internal/handler/response.go",
+        "internal/handler/static.go",
+        "main.go"
       ],
       "acceptance": [
-        "页面加载后展示图书列表，每行可选中（单选）",
-        "点击删除弹出二次确认，确认后调用 DELETE /api/books/{id}",
-        "删除成功后列表刷新且该图书消失，失败时展示错误提示"
+        "DELETE /api/books/{id} 删除已存在图书返回 204 且无响应体",
+        "DELETE /api/books/{id} 对不存在 ID 返回 404，响应体为 {\"error\":{\"code\":\"NOT_FOUND\",\"message\":...}}",
+        "DELETE /api/books/abc 返回 400 INVALID_ID",
+        "GET /health 返回 200 与 {\"status\":\"ok\"}",
+        "GET /api/books、POST /api/books、GET /api/books/{id}、PATCH /api/books/{id}/stock 行为与 04-api.md 一致",
+        "CORS 允许 http://localhost:5173 与 http://localhost:5174，OPTIONS 预检返回 204",
+        "服务监听 8072（PORT 环境变量可覆盖）"
       ]
     },
     {
       "id": "T4",
-      "title": "静态托管与端口/CORS 收口并整体验收",
+      "title": "实现静态前端页面（列表 + 选择删除 + 二次确认 + 刷新）",
       "deps": [
         "T3"
       ],
       "files": [
-        "main.go"
+        "web/index.html",
+        "web/static/app.js",
+        "web/static/style.css"
       ],
       "acceptance": [
-        "GET / 返回 index.html，静态资源与 API 同端口提供",
-        "默认监听 8080，PORT 环境变量可覆盖",
-        "CORS 允许 http://localhost:5173 与 http://localhost:5174",
-        "启动后 GET /health 返回 200 且 body 为 {\"status\":\"ok\"}；访问 http://localhost:8080/ 可完成选择删除全流程"
+        "访问 http://localhost:8072/ 返回包含图书列表与每行删除按钮的页面",
+        "页面加载时调用 GET /api/books 渲染列表（ID/标题/作者/库存）",
+        "点击删除弹出二次确认，确认后调用 DELETE /api/books/{id}",
+        "删除成功（204）后重新拉取列表，该图书从页面消失",
+        "删除失败（如 404）在页面给出错误提示且列表保持一致",
+        "页面无构建步骤，由后端 / 与 /static/ 直接托管"
+      ]
+    },
+    {
+      "id": "T5",
+      "title": "端到端联调与可运行验收",
+      "deps": [
+        "T4"
+      ],
+      "files": [
+        "main.go",
+        "web/index.html",
+        "internal/handler/book_handler.go"
+      ],
+      "acceptance": [
+        "在 auto_code/go 目录执行 go run . 服务正常启动并监听 8072",
+        "curl http://localhost:8072/health 返回 200 与 {\"status\":\"ok\"}",
+        "创建图书后 DELETE /api/books/{id} 返回 204，再次 GET /api/books/{id} 返回 404 NOT_FOUND",
+        "DELETE 不存在 ID 返回 404 且错误结构含 code=NOT_FOUND",
+        "浏览器打开 http://localhost:8072/ 点击删除并确认后列表刷新且该图书消失"
       ]
     }
   ],
   "risks": [
-    "基线约定端口 8072 与需求 8080 不一致，需以 8080 为默认并保留 PORT 覆盖，文档需同步说明",
-    "现有 main.go 已含 DELETE 路由，需确认其实现是否满足 404/400 语义，避免重复注册路由",
-    "前端删除后整页刷新与局部移除需统一为一种交互，避免状态不一致",
-    "内存存储重启后数据丢失，属预期范围外"
+    "端口以基线 8072 为准，用户原文 8080 为历史描述，需在文档与页面提示中统一为 8072，避免访问地址混淆",
+    "删除成功返回 204 无响应体，前端需按 status 判断而非解析 JSON，避免误报错误",
+    "静态资源路径需与 embed/相对路径读取方式一致，否则 go run 与打包后行为不一致",
+    "内存存储重启丢数据，验收需在同一进程生命周期内完成",
+    "并发删除与库存调整需统一走 RWMutex，避免数据竞争"
   ]
 }
