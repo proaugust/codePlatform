@@ -180,6 +180,13 @@ def _latest_user_directives(data: dict[str, Any] | None, *, limit: int = 5) -> l
     return out
 
 
+def conclusion_to_chat_text(conclusion: dict[str, Any], *, task_count: int = 0) -> str:
+    """聊天气泡：只留一两句摘要，结构化字段仍写入 docs，不在此展示。"""
+    _ = task_count
+    summary = str(conclusion.get("summary") or "").strip() or "（见文档）"
+    return f"计划已更新：{summary}\n确认无误后可点「执行生成」写代码（不会自动启动进程）。"
+
+
 def conclusion_to_spec_text(
     conclusion: dict[str, Any],
     *,
@@ -306,7 +313,7 @@ def _parse_conclusion(obj: dict[str, Any]) -> dict[str, Any]:
         "open_questions": [str(x) for x in (obj.get("open_questions") or []) if str(x).strip()],
     }
     if not conclusion["summary"]:
-        conclusion["summary"] = "（模型未给出摘要，请编辑后再次分析计划）"
+        conclusion["summary"] = "（模型未给出摘要，请补充需求后再次分析计划）"
     if len(conclusion["scope"]) < 1:
         conclusion["scope"] = ["提供基础 REST API 与 GET /health"]
     # 范围已含前端时，去掉 out_of_scope 里的「不涉及前端」
@@ -564,11 +571,7 @@ async def run_plan(
         "task_count": len(plan.get("tasks") or []),
         "at": _now(),
     }
-    reply = (
-        f"计划已更新：{last_plan['summary'] or '（见文档）'}。"
-        f"任务数 {last_plan['task_count']}。"
-        "确认无误后可点「执行生成」写 Java/前端代码（不会自动启动进程）。"
-    )
+    reply = conclusion_to_chat_text(merged, task_count=int(last_plan["task_count"]))
     messages = list(data.get("messages") or [])
     messages.append({"role": "assistant", "content": reply, "at": _now(), "mode": "plan"})
     data["messages"] = messages

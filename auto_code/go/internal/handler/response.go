@@ -5,10 +5,9 @@ import (
 	"net/http"
 )
 
-type envelope struct {
+type errorBody struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
-	Data    any    `json:"data"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -20,22 +19,22 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func writeSuccess(w http.ResponseWriter, status int, message string, data any) {
-	if message == "" {
-		message = "success"
-	}
-	writeJSON(w, status, envelope{Code: "OK", Message: message, Data: data})
-}
-
-func writeData(w http.ResponseWriter, status int, data any) {
-	writeSuccess(w, status, "success", data)
+func writeSuccess(w http.ResponseWriter, status int, v any) {
+	writeJSON(w, status, v)
 }
 
 func writeError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, envelope{Code: code, Message: message, Data: nil})
+	writeJSON(w, status, errorBody{Code: code, Message: message})
+}
+
+func writeMessage(w http.ResponseWriter, status int, message string) {
+	writeJSON(w, status, map[string]string{"message": message})
 }
 
 func writeValidationError(w http.ResponseWriter, message string) {
+	if message == "" {
+		message = "参数校验失败"
+	}
 	writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", message)
 }
 

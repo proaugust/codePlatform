@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import AgentPipeline from '../components/AgentPipeline.vue'
 import { usePlatform } from '../composables/usePlatform'
 
 const {
@@ -7,34 +8,28 @@ const {
   elicitation,
   messages,
   input,
-  chatting,
   planning,
   executing,
   busy,
   canChat,
   canPlan,
-  canExecute,
   readyToPlan,
   planReady,
   rollingSummary,
   sessionClosed,
   pipelineNote,
+  runPipeline,
+  runEventsLive,
   status,
   elicitStatus,
-  conclusionEdit,
   error,
-  listToText,
-  textToList,
   maxTurns,
   target,
   switchTarget,
   onNewSession,
   onRestore,
-  onSend,
   onPlan,
-  onExecute,
   onPlanAndExecute,
-  onKeydown,
 } = usePlatform()
 
 const applying = computed(() => planning.value || executing.value)
@@ -87,7 +82,7 @@ const applying = computed(() => planning.value || executing.value)
       <div class="chat-panel-head">
         <strong>分析窗口</strong>
         <span class="muted">
-          Enter 发送澄清 · 满 {{ maxTurns }} 轮自动总结关闭
+          分析 = plan · 执行 = agent · 满 {{ maxTurns }} 轮自动总结关闭
           <template v-if="planReady"> · 计划就绪</template>
           <template v-if="sessionClosed"> · 已关闭</template>
         </span>
@@ -97,7 +92,7 @@ const applying = computed(() => planning.value || executing.value)
       </div>
       <div class="chat-log">
         <div v-if="!messages.length" class="muted chat-empty">
-          描述需求后点「分析并改代码」：会先出计划再写前后端。也可只点「仅分析计划」预览后再改。
+          描述需求后选：分析（计划）只出方案；执行（分析并改代码）会先计划再改代码。
         </div>
         <div
           v-for="(m, i) in messages"
@@ -117,18 +112,24 @@ const applying = computed(() => planning.value || executing.value)
           v-model="input"
           class="chat-input"
           rows="3"
-          placeholder="输入需求…（Enter 发送澄清，Shift+Enter 换行；改代码用下方按钮）"
+          placeholder="输入需求…"
           :disabled="!canChat"
-          @keydown="onKeydown"
         />
         <div class="chat-actions">
-          <button type="button" :disabled="!input.trim() || !canChat" @click="onSend">
-            {{ chatting ? '发送中…' : '发送' }}
+          <button
+            type="button"
+            class="btn-secondary"
+            :disabled="!canPlan"
+            title="plan：只分析并产出计划，不改代码"
+            @click="onPlan"
+          >
+            {{ planning && !executing ? '分析中…' : '分析（计划）' }}
           </button>
           <button
             type="button"
             class="btn-gen"
             :disabled="!canPlan || busy"
+            title="agent：分析计划并改代码"
             @click="onPlanAndExecute"
           >
             {{
@@ -136,92 +137,25 @@ const applying = computed(() => planning.value || executing.value)
                 ? '分析中…'
                 : executing
                   ? '改代码中…'
-                  : '分析并改代码'
+                  : '执行（分析并改代码）'
             }}
           </button>
-          <button type="button" class="btn-secondary" :disabled="!canPlan" @click="onPlan">
-            {{ planning && !executing ? '分析中…' : '仅分析计划' }}
-          </button>
-          <button
-            type="button"
-            class="btn-secondary"
-            :disabled="!canExecute"
-            :title="canExecute ? '按当前计划生成/改代码' : '需先「分析计划」；仅聊天确认不会改代码'"
-            @click="onExecute"
-          >
-            {{ executing && !planning ? '改代码中…' : '仅执行生成' }}
-          </button>
           <span v-if="applying && pipelineNote" class="muted">{{ pipelineNote }}</span>
-          <span v-else-if="planReady" class="muted">可改代码</span>
+          <span v-else-if="planReady" class="muted">计划就绪</span>
           <span v-else-if="readyToPlan" class="muted">可分析</span>
-          <span v-else class="muted">先分析计划再执行（聊天确认无效）</span>
+          <span v-else class="muted">分析 = plan · 执行 = agent</span>
         </div>
       </div>
 
       <div class="chat-gen-row">
         <span class="muted">
-          流程：澄清（可选）→ 分析并改代码 → 到「运行」页启动
+          流程：分析（计划）→ 执行（分析并改代码）→ 到「运行」页启动
           <template v-if="status"> · 文档 {{ status.has_docs ? '已就绪' : '未生成' }}</template>
           <template v-if="elicitStatus"> · {{ elicitStatus }}</template>
         </span>
       </div>
-    </div>
-  </div>
 
-  <div
-    v-if="conclusionEdit.summary || elicitStatus === 'planned' || rollingSummary"
-    class="result"
-  >
-    <h2>结论（可编辑；分析时一并提交）</h2>
-    <label class="label" for="c-summary">摘要</label>
-    <textarea
-      id="c-summary"
-      v-model="conclusionEdit.summary"
-      class="concl-area"
-      rows="3"
-      :disabled="sessionClosed"
-    />
-    <div class="concl-grid">
-      <div>
-        <label class="label">目标（每行一条）</label>
-        <textarea
-          class="concl-area"
-          rows="4"
-          :value="listToText(conclusionEdit.goals)"
-          :disabled="sessionClosed"
-          @input="conclusionEdit.goals = textToList(($event.target as HTMLTextAreaElement).value)"
-        />
-      </div>
-      <div>
-        <label class="label">范围</label>
-        <textarea
-          class="concl-area"
-          rows="4"
-          :value="listToText(conclusionEdit.scope)"
-          :disabled="sessionClosed"
-          @input="conclusionEdit.scope = textToList(($event.target as HTMLTextAreaElement).value)"
-        />
-      </div>
-      <div>
-        <label class="label">不在范围</label>
-        <textarea
-          class="concl-area"
-          rows="4"
-          :value="listToText(conclusionEdit.out_of_scope)"
-          :disabled="sessionClosed"
-          @input="conclusionEdit.out_of_scope = textToList(($event.target as HTMLTextAreaElement).value)"
-        />
-      </div>
-      <div>
-        <label class="label">非功能</label>
-        <textarea
-          class="concl-area"
-          rows="4"
-          :value="listToText(conclusionEdit.nfr)"
-          :disabled="sessionClosed"
-          @input="conclusionEdit.nfr = textToList(($event.target as HTMLTextAreaElement).value)"
-        />
-      </div>
+      <AgentPipeline :pipeline="runPipeline" :live="runEventsLive || applying" />
     </div>
   </div>
 

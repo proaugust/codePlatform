@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import { formatError, listBooks, updateStock } from '../api/client'
+import { deleteBook, formatError, listBooks, updateStock } from '../api/client'
 import type { Book } from '../types'
 
 const books = ref<Book[]>([])
 const keyword = ref('')
 const loading = ref(false)
 const savingId = ref<number | null>(null)
+const deletingId = ref<number | null>(null)
+const selectedId = ref<number | null>(null)
 const errorCode = ref('')
 const errorMessage = ref('')
 const notice = ref('')
@@ -25,12 +27,20 @@ function setError(error: unknown) {
   notice.value = ''
 }
 
-async function load() {
-  loading.value = true
+function clearMessages() {
   errorCode.value = ''
   errorMessage.value = ''
+  notice.value = ''
+}
+
+async function load() {
+  loading.value = true
+  clearMessages()
   try {
     books.value = await listBooks(keyword.value.trim() || undefined)
+    if (selectedId.value !== null && !books.value.some((b) => b.id === selectedId.value)) {
+      selectedId.value = null
+    }
   } catch (error) {
     books.value = []
     setError(error)
@@ -44,11 +54,13 @@ function reset() {
   void load()
 }
 
+function selectBook(book: Book) {
+  selectedId.value = selectedId.value === book.id ? null : book.id
+}
+
 function startEdit(book: Book) {
   editing.value = { ...editing.value, [book.id]: String(book.stock) }
-  errorCode.value = ''
-  errorMessage.value = ''
-  notice.value = ''
+  clearMessages()
 }
 
 function cancelEdit(id: number) {
@@ -60,9 +72,7 @@ function cancelEdit(id: number) {
 async function saveStock(book: Book) {
   const raw = editing.value[book.id]
   const value = Number(raw)
-  errorCode.value = ''
-  errorMessage.value = ''
-  notice.value = ''
+  clearMessages()
 
   if (raw === undefined || raw === '' || !Number.isInteger(value) || value < 0) {
     errorCode.value = 'VALIDATION_ERROR'
@@ -70,9 +80,16 @@ async function saveStock(book: Book) {
     return
   }
 
+  const delta = value - book.stock
+  if (delta === 0) {
+    cancelEdit(book.id)
+    notice.value = '库存未发生变化'
+    return
+  }
+
   savingId.value = book.id
   try {
-    const updated = await updateStock(book.id, value)
+    const updated = await updateStock(book.id, delta)
     books.value = books.value.map((item) => (item.id === updated.id ? updated : item))
     cancelEdit(book.id)
     notice.value = `《${updated.title}》库存已更新为 ${updated.stock}`
@@ -80,6 +97,26 @@ async function saveStock(book: Book) {
     setError(error)
   } finally {
     savingId.value = null
+  }
+}
+
+async function removeBook(book: Book) {
+  clearMessages()
+  const confirmed = window.confirm(`确定要删除《${book.title}》（ID: ${book.id}）吗？此操作不可恢复。`)
+  if (!confirmed) return
+
+  deletingId.value = book.id
+  try {
+    await deleteBook(book.id)
+    books.value = books.value.filter((item) => item.id !== book.id)
+    if (selectedId.value === book.id) selectedId.value = null
+    cancelEdit(book.id)
+    notice.value = `《${book.title}》已删除`
+    await load()
+  } catch (error) {
+    setError(error)
+  } finally {
+    deletingId.value = null
   }
 }
 
@@ -118,6 +155,7 @@ onMounted(load)
     <table v-else class="table">
       <thead>
         <tr>
+          <th>选择</th>
           <th>ID</th>
           <th>书名</th>
           <th>作者</th>
@@ -128,7 +166,16 @@ onMounted(load)
         </tr>
       </thead>
       <tbody>
-        <tr v-for="book in books" :key="book.id">
+        <tr v-for="book in books" :key="book.id" :class="{ selected: selectedId === book.id }">
+          <td>
+            <input
+              type="radio"
+              name="book-select"
+              :value="book.id"
+              :checked="selectedId === book.id"
+              @change="selectBook(book)"
+            />
+          </td>
           <td>{{ book.id }}</td>
           <td>{{ book.title }}</td>
           <td>{{ book.author }}</td>
@@ -163,9 +210,21 @@ onMounted(load)
             <button v-else class="btn small" type="button" @click="startEdit(book)">
               改库存
             </button>
+            <button
+              class="btn small danger"
+              type="button"
+              :disabled="deletingId === book.id"
+              @click="removeBook(book)"
+            >
+              {{ deletingId === book.id ? '删除中…' : '删除' }}
+            </button>
           </td>
         </tr>
       </tbody>
     </table>
+
+    <p v-if="selectedId !== null" class="muted">
+      已选择图书 ID：{{ selectedId }}
+    </p>
   </section>
 </template>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -11,9 +12,37 @@ from backend.services import ir
 
 logger = logging.getLogger(__name__)
 
+# go build / javac 风格：path:line: 或 path:line:col:
+_ERR_PATH_RE = re.compile(
+    r"(?P<path>(?:[A-Za-z]:)?[\w./\\-]+\.(?:go|java)):\d+(?::\d+)?:",
+)
+
 
 class ValidatorError(RuntimeError):
     pass
+
+
+def parse_error_paths(text: str) -> list[str]:
+    """从编译 stderr/stdout 提取相对源文件路径（去重保序）。"""
+    found: list[str] = []
+    seen: set[str] = set()
+    for m in _ERR_PATH_RE.finditer(text or ""):
+        raw = m.group("path").replace("\\", "/")
+        # 丢掉绝对路径前缀，尽量落到工程相对路径
+        if re.match(r"^[A-Za-z]:/", raw):
+            # Windows 绝对路径：取最后带 src/ 或 internal/ 的后缀，否则取 basename 所在相对段
+            parts = Path(raw).parts
+            for i, part in enumerate(parts):
+                if part in {"internal", "src", "cmd", "pkg"}:
+                    raw = "/".join(parts[i:])
+                    break
+            else:
+                raw = Path(raw).name
+        raw = raw.lstrip("./")
+        if raw and raw not in seen:
+            seen.add(raw)
+            found.append(raw)
+    return found
 
 
 def _run_cmd(cmd: list[str], cwd: Path, timeout: float = 120.0) -> dict[str, Any]:
@@ -107,20 +136,31 @@ async def run_validator(lang: str, *, repair_count: int = 0) -> dict[str, Any]:
     failed = [c for c in commands if not c.get("ok")]
     if failed:
         hints = []
+        blob_parts: list[str] = []
         for c in failed:
+            stderr = c.get("stderr") or ""
+            stdout = c.get("stdout") or ""
+            blob_parts.extend([stderr, stdout])
             hints.append(
                 f"command: {' '.join(c.get('cmd') or [])}\n"
                 f"returncode: {c.get('returncode')}\n"
-                f"stderr:\n{c.get('stderr') or ''}\n"
-                f"stdout:\n{c.get('stdout') or ''}\n"
+                f"stderr:\n{stderr}\n"
+                f"stdout:\n{stdout}\n"
             )
+        repair_files = parse_error_paths("\n".join(blob_parts))
         return _finish(
             lang,
             ok=False,
             skipped=skipped,
             commands=commands,
             repair_count=repair_count,
-            repair_hints="\n".join(hints) + "\n请修复编译错误并重新输出完整可编译工程（JSON files）。",
+            repair_hints=(
+                "\n".join(hints)
+                + "\n请只修复报错涉及的文件；同包可补充缺失 helper（如 undefined 的函数），"
+                "不要重写无关文件。输出 JSON files。\n"
+                + (f"报错文件: {repair_files}\n" if repair_files else "")
+            ),
+            repair_files=repair_files,
         )
 
     return _finish(
@@ -130,6 +170,7 @@ async def run_validator(lang: str, *, repair_count: int = 0) -> dict[str, Any]:
         commands=commands,
         repair_count=repair_count,
         repair_hints="",
+        repair_files=[],
     )
 
 
@@ -142,6 +183,7 @@ def _finish(
     repair_count: int,
     repair_hints: str,
     note: str = "",
+    repair_files: list[str] | None = None,
 ) -> dict[str, Any]:
     # 不把完整 cmd list 原样塞进 JSON 时转换一下
     cmds_out = []
@@ -162,8 +204,16 @@ def _finish(
         "commands": cmds_out,
         "repair_count": repair_count,
         "repair_hints": repair_hints,
+        "repair_files": list(repair_files or []),
         "note": note,
     }
     path = ir.write_validation(lang, payload)
-    logger.info("Validator lang=%s ok=%s repairs=%s path=%s", lang, ok, repair_count, path)
+    logger.info(
+        "Validator lang=%s ok=%s repairs=%s files=%s path=%s",
+        lang,
+        ok,
+        repair_count,
+        payload["repair_files"],
+        path,
+    )
     return payload

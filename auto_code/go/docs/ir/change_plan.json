@@ -2,27 +2,23 @@
   "lang": "go",
   "mode": "incremental",
   "approved": true,
-  "summary": "在现有 Go net/http 图书服务上增量补齐用户硬需求：新增 DELETE /api/books/{id} 删除接口（前端可选择图书、二次确认后由后端删除并刷新列表），同时修复新增图书 id 校验（非大于 0 整数返回 VALIDATION_ERROR），保留并扩展原有列表/新增/详情/库存接口与静态页面托管、GET /health。",
+  "summary": "在现有 Go net/http 图书管理项目上增量补齐用户硬需求：新增 PUT /api/books/{id} 修改图书接口，并在前端列表每行增加可见「编辑」按钮与预填弹窗表单，保存后刷新列表，同时保留列表/新增/删除/库存接口、静态托管与 GET /health。",
   "modules": [
     {
       "name": "handler 层",
-      "responsibility": "路由注册与请求处理：解析并校验路径参数 id（大于 0 整数）、统一 JSON 响应与错误码、CORS、静态页面托管"
+      "responsibility": "解析 PUT /api/books/{id} 路径参数与 JSON 请求体，调用 Service，统一输出 JSON 与 VALIDATION_ERROR/NOT_FOUND 错误码；保留现有路由与静态托管"
     },
     {
       "name": "service 层",
-      "responsibility": "业务规则：删除前存在性校验、领域错误（NOT_FOUND/VALIDATION_ERROR）映射、新增图书 id 校验"
+      "responsibility": "修改图书业务校验（id>0、title 非空、stock 非负）与编排，复用 ErrValidation/ErrNotFound 领域错误"
     },
     {
       "name": "repository 层",
-      "responsibility": "内存存储读写，sync.RWMutex 保证并发安全，按 id 删除与自增 ID 维护"
+      "responsibility": "内存 map 按 id 查找并覆盖 title/author/stock，返回更新后副本，不存在返回 ErrNotFound，保持并发安全"
     },
     {
-      "name": "model 层",
-      "responsibility": "图书实体定义（id/title/author/stock/created_at）"
-    },
-    {
-      "name": "静态前端页面",
-      "responsibility": "图书列表展示、单选选择、删除按钮与二次确认弹窗、错误提示、删除成功后刷新列表"
+      "name": "前端静态页面",
+      "responsibility": "图书列表每行渲染「编辑」按钮，点击弹出预填表单，保存调用 PUT 接口，成功关闭弹窗并刷新列表，失败展示错误信息"
     }
   ],
   "apis": [
@@ -34,142 +30,117 @@
     {
       "method": "GET",
       "path": "/api/books",
-      "description": "图书列表，返回统一 JSON 包装的图书数组"
+      "description": "图书列表，返回图书数组"
     },
     {
       "method": "POST",
       "path": "/api/books",
-      "description": "新增图书；若携带 id 必须为大于 0 的整数，否则 400 VALIDATION_ERROR（消息：图书 id 必须为大于 0 的整数）"
+      "description": "新增图书，id 由后端生成，成功 201"
     },
     {
       "method": "GET",
       "path": "/api/books/{id}",
-      "description": "图书详情；id 非法 400 VALIDATION_ERROR，不存在 404 NOT_FOUND"
+      "description": "按 id 查询图书，非法 id 400 VALIDATION_ERROR，不存在 404 NOT_FOUND"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/books/{id}",
+      "description": "修改图书（用户硬需求），请求体 title/author/stock，id 以路径为准；成功 200 返回更新后图书，非法 id 或校验失败 400 VALIDATION_ERROR，不存在 404 NOT_FOUND"
     },
     {
       "method": "DELETE",
       "path": "/api/books/{id}",
-      "description": "用户硬需求：按 id 删除图书；成功 200 返回 {code:OK,message:deleted,data:{id}}；id 非法 400 VALIDATION_ERROR；不存在 404 NOT_FOUND"
+      "description": "删除图书，成功 204，非法 id 400，不存在 404 NOT_FOUND"
     },
     {
       "method": "PATCH",
       "path": "/api/books/{id}/stock",
-      "description": "调整库存（沿用现有能力），delta 变更，非法 400、不存在 404"
+      "description": "调整库存，成功 200 返回更新后图书"
+    },
+    {
+      "method": "GET",
+      "path": "/static/",
+      "description": "静态资源托管"
     },
     {
       "method": "GET",
       "path": "/{$}",
-      "description": "托管静态首页，与 API 同端口提供前端页面"
+      "description": "根路径返回前端页面"
     }
   ],
   "data_model": [
     {
-      "name": "books（内存存储）",
+      "name": "Book（内存 books map）",
       "fields": [
-        "id：int64，自增主键，必须大于 0",
-        "title：string，非空，长度 1~200",
-        "author：string，非空，长度 1~100",
-        "stock：int，>= 0",
-        "created_at：time.Time，创建时间"
+        "id：int64，主键，>0，后端自增生成",
+        "title：string，非空，去首尾空格后长度>0",
+        "author：string，可为空",
+        "stock：int，>=0"
       ]
     }
   ],
   "tasks": [
     {
       "id": "T1",
-      "title": "Repository 增加按 ID 删除与并发安全写操作",
+      "title": "补齐后端修改图书接口 PUT /api/books/{id}",
       "deps": [],
       "files": [
+        "internal/handler/book_handler.go",
+        "internal/service/book_service.go",
+        "internal/service/errors.go",
         "internal/repository/book_repository.go",
-        "internal/model/book.go"
+        "main.go"
       ],
       "acceptance": [
-        "新增 DeleteByID(id int64) error：命中则从内存存储移除并返回 nil，未命中返回不存在错误",
-        "删除与新增/更新均在写锁（sync.RWMutex.Lock）内执行，读操作使用读锁",
-        "自增 ID 维护不受删除影响，删除后 ID 不复用",
-        "go build ./... 通过"
+        "PUT /api/books/1 传入合法 title/author/stock 返回 200 且响应体为更新后图书，随后 GET /api/books/1 读到新值",
+        "PUT /api/books/999999 返回 404 且错误码 NOT_FOUND",
+        "PUT /api/books/abc 或 title 为空返回 400 且错误码 VALIDATION_ERROR",
+        "现有 GET/POST/DELETE/PATCH 接口行为不变，GET /health 返回 200 与 {\"status\":\"ok\"}"
       ]
     },
     {
       "id": "T2",
-      "title": "Service 增加删除业务与新增 id 校验修复",
+      "title": "前端列表增加可见编辑入口与弹窗表单",
       "deps": [
         "T1"
       ],
       "files": [
-        "internal/service/book_service.go",
-        "internal/service/errors.go"
-      ],
-      "acceptance": [
-        "新增 DeleteBook(id int64) error：id <= 0 返回校验错误，不存在返回 NOT_FOUND 领域错误，成功返回 nil",
-        "新增图书时若请求携带 id 且非大于 0 整数，返回校验错误，消息为「图书 id 必须为大于 0 的整数」",
-        "领域错误可被 handler 映射为 VALIDATION_ERROR(400)/NOT_FOUND(404)",
-        "go build ./... 通过"
-      ]
-    },
-    {
-      "id": "T3",
-      "title": "Handler 实现 DELETE /api/books/{id} 与统一错误响应",
-      "deps": [
-        "T2"
-      ],
-      "files": [
-        "internal/handler/book_handler.go",
-        "internal/handler/response.go",
-        "main.go"
-      ],
-      "acceptance": [
-        "DELETE /api/books/{id} 成功返回 200 与 {code:OK,message:deleted,data:{id}}",
-        "DELETE /api/books/999999 返回 404 且 code 为 NOT_FOUND",
-        "DELETE /api/books/0 或非整数 id 返回 400 且 code 为 VALIDATION_ERROR，消息为「图书 id 必须为大于 0 的整数」",
-        "POST /api/books 携带非法 id 返回 400 VALIDATION_ERROR",
-        "CORS 允许 5173/5174 与 DELETE 方法",
-        "go build ./... 通过"
-      ]
-    },
-    {
-      "id": "T4",
-      "title": "静态页面增加选择与删除交互",
-      "deps": [
-        "T3"
-      ],
-      "files": [
-        "internal/handler/static.go",
         "static/index.html",
         "static/app.js",
         "static/style.css"
       ],
       "acceptance": [
-        "页面展示图书列表，可单选选中某本图书",
-        "点击删除弹出二次确认，确认后调用 DELETE /api/books/{id}",
-        "删除成功后局部移除该行并重新拉取 GET /api/books 刷新列表",
-        "删除失败（400/404）展示后端返回的错误消息",
-        "页面无需构建步骤，由后端 / 直接托管"
+        "图书列表每行可见「编辑」按钮",
+        "点击编辑弹出表单并预填当前图书 title/author/stock",
+        "保存调用 PUT /api/books/{id}，成功后关闭弹窗并刷新列表显示更新后数据",
+        "保存失败时页面展示后端返回的错误信息",
+        "现有新增、删除交互与根路径页面访问不受影响"
       ]
     },
     {
-      "id": "T5",
-      "title": "端到端联调与可运行验收",
+      "id": "T3",
+      "title": "联调与冒烟验证修改闭环",
       "deps": [
-        "T4"
+        "T1",
+        "T2"
       ],
       "files": [
         "main.go",
-        "internal/handler/book_handler.go"
+        "internal/handler/book_handler.go",
+        "static/app.js"
       ],
       "acceptance": [
-        "go run . 启动后监听 8072，GET /health 返回 200 且 JSON 为 {\"status\":\"ok\"}",
-        "curl -X DELETE /api/books/{存在的id} 返回 200，随后 GET /api/books 列表中不再包含该图书",
-        "curl -X DELETE /api/books/999999 返回 404 且 code 为 NOT_FOUND；DELETE /api/books/0 返回 400 且 code 为 VALIDATION_ERROR",
-        "浏览器访问 http://localhost:8072/ 可选中图书、二次确认后删除并自动刷新列表"
+        "启动服务后 GET /health 返回 200 与 {\"status\":\"ok\"}",
+        "curl 依次验证 PUT 成功 200、不存在 404 NOT_FOUND、非法 id/空 title 400 VALIDATION_ERROR",
+        "浏览器访问 http://localhost:8072/ 可见编辑按钮并完成一次编辑保存后列表刷新"
       ]
     }
   ],
   "risks": [
-    "端口以基线 8072 为准，用户提到的 8080 视为历史描述，需在文档与页面提示中保持一致，避免访问地址混淆",
-    "删除成功返回体采用 200 + JSON（而非 204），前端需按 code 判断成功，避免空响应解析异常",
-    "并发删除同一 id 时仅一方成功、另一方返回 404，属预期语义，前端需容忍",
-    "静态页面路径与 API 路由共存于同一 ServeMux，需确保 /api/ 前缀不被静态文件服务拦截",
-    "新增图书若允许客户端指定 id，可能与自增 ID 冲突，需明确冲突处理（建议忽略或返回 VALIDATION_ERROR）"
+    "内存存储进程重启数据清空，修改结果不持久化",
+    "端口存在 8080/8072 历史冲突信息，需以 8072 为准并在运行页确认",
+    "前端静态文件路径需与 static.go 托管目录一致，否则编辑入口不可见",
+    "PUT 请求体中的 id 必须被忽略，避免与路径参数冲突导致误更新",
+    "新增图书 id 由后端生成，前端不得传 id，否则可能触发 VALIDATION_ERROR"
   ]
 }

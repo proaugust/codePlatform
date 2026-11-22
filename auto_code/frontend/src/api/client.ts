@@ -38,7 +38,7 @@ export function formatError(error: unknown): ApiErrorShape {
   return { code: 'UNKNOWN_ERROR', message: '发生未知错误' }
 }
 
-/** Go 常用 { data } / { error:{code,message} }；Java 多为顶层字段。兼容两者。 */
+/** 后端统一包装 { code, message, data }，取出 data 字段。 */
 function unwrapData(payload: unknown): unknown {
   if (payload && typeof payload === 'object' && !Array.isArray(payload) && 'data' in payload) {
     return (payload as { data: unknown }).data
@@ -66,7 +66,7 @@ function readErrorFields(payload: unknown): {
         ? src.timestamp
         : typeof root.timestamp === 'string'
           ? root.timestamp
-          : undefined,
+          : undefined
   }
 }
 
@@ -86,7 +86,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new ApiError(
       0,
       'NETWORK_ERROR',
-      '无法连接后端服务，请到「运行」页确认业务后端已启动',
+      '无法连接后端服务，请确认业务后端已在 8072 端口启动',
       path
     )
   }
@@ -140,13 +140,15 @@ export function createBook(payload: CreateBookRequest): Promise<Book> {
   })
 }
 
-export function updateStock(id: number, stock: number): Promise<Book> {
+/** 调整库存：后端以 delta 变更（正数增加、负数减少）。 */
+export function updateStock(id: number, delta: number): Promise<Book> {
   return request<Book>(`/api/books/${id}/stock`, {
     method: 'PATCH',
-    body: JSON.stringify({ stock })
+    body: JSON.stringify({ delta })
   })
 }
 
-export function deleteBook(id: number): Promise<void> {
-  return request<void>(`/api/books/${id}`, { method: 'DELETE' })
+/** 删除图书：成功返回 { id }。 */
+export function deleteBook(id: number): Promise<{ id: number }> {
+  return request<{ id: number }>(`/api/books/${id}`, { method: 'DELETE' })
 }

@@ -51,6 +51,22 @@ func (s *BookService) CreateBookWithID(id int64, title, author string, stock int
 	return b, nil
 }
 
+func (s *BookService) UpdateBook(id int64, title, author string, stock int) (*model.Book, error) {
+	if id <= 0 {
+		return nil, NewInvalidArgument("图书 id 必须为大于 0 的整数")
+	}
+	title = strings.TrimSpace(title)
+	author = strings.TrimSpace(author)
+	if title == "" || len(title) > 200 || len(author) > 100 || stock < 0 {
+		return nil, NewInvalidArgument("invalid title, author or stock")
+	}
+	b, err := s.repo.Update(id, &model.Book{Title: title, Author: author, Stock: stock})
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+	return b, nil
+}
+
 func (s *BookService) DeleteBook(id int64) error {
 	if id <= 0 {
 		return NewInvalidArgument("图书 id 必须为大于 0 的整数")

@@ -1,53 +1,49 @@
 # 接口清单
 
-统一响应结构：
-- 成功：`{"code":"OK","message":"success","data":...}`
-- 失败：`{"code":"<ERROR_CODE>","message":"<描述>","data":null}`
+统一响应约定：
+- 成功：直接返回业务 JSON 对象或数组。
+- 失败：`{"error":{"code":"VALIDATION_ERROR|NOT_FOUND","message":"..."}}`。
+- 所有接口支持 CORS（允许 5173/5174）。
 
 ## GET /health
-- 描述：健康检查。
-- 响应 200：`{"status":"ok"}`
+- 说明：健康检查。
+- 响应 200：`{"status":"ok"}`。
 
 ## GET /api/books
-- 描述：图书列表。
-- 响应 200：`{"code":"OK","message":"success","data":[{"id":1,"title":"...","author":"...","stock":10}]}`
+- 说明：图书列表。
+- 响应 200：`[{"id":1,"title":"...","author":"...","stock":10}]`。
 
 ## POST /api/books
-- 描述：新增图书。
-- 请求体：`{"title":"...","author":"...","stock":10}`
-- 校验：`title`/`author` 非空；`stock >= 0`；若请求携带 `id`，必须为大于 0 的整数，否则返回 400 `VALIDATION_ERROR`（消息：`图书 id 必须为大于 0 的整数`）。
-- 响应 201：`{"code":"OK","message":"success","data":{"id":2,...}}`
-- 错误：400 `VALIDATION_ERROR`
+- 说明：新增图书，id 由后端生成。
+- 请求体：`{"title":"...","author":"...","stock":10}`。
+- 响应 201：新增后的图书对象。
+- 错误 400 `VALIDATION_ERROR`：title 为空或 stock 为负。
 
 ## GET /api/books/{id}
-- 描述：图书详情。
-- 路径参数：`id` 必须为大于 0 的整数。
-- 响应 200：`{"code":"OK","message":"success","data":{...}}`
-- 错误：400 `VALIDATION_ERROR`；404 `NOT_FOUND`
+- 说明：按 id 查询图书。
+- 响应 200：图书对象。
+- 错误 400 `VALIDATION_ERROR`：id 非法。
+- 错误 404 `NOT_FOUND`：图书不存在。
+
+## PUT /api/books/{id}
+- 说明：修改图书，id 以路径参数为准，请求体中的 id 被忽略。
+- 请求体：`{"title":"...","author":"...","stock":10}`。
+- 响应 200：更新后的图书对象。
+- 错误 400 `VALIDATION_ERROR`：id 非法、title 为空、stock 为负。
+- 错误 404 `NOT_FOUND`：图书不存在。
 
 ## DELETE /api/books/{id}
-- 描述：删除指定图书（用户硬需求）。
-- 路径参数：`id` 必须为大于 0 的整数。
-- 响应 200：`{"code":"OK","message":"deleted","data":{"id":1}}`
-- 错误：
-  - 400 `VALIDATION_ERROR`：id 非法（非整数或 <= 0），消息 `图书 id 必须为大于 0 的整数`
-  - 404 `NOT_FOUND`：图书不存在，消息 `图书不存在`
-  - 500 `INTERNAL_ERROR`：内部错误
+- 说明：删除图书。
+- 响应 204：无响应体。
+- 错误 400 `VALIDATION_ERROR`：id 非法。
+- 错误 404 `NOT_FOUND`：图书不存在。
 
 ## PATCH /api/books/{id}/stock
-- 描述：调整库存（沿用现有能力）。
-- 请求体：`{"delta":-1}`
-- 响应 200：`{"code":"OK","message":"success","data":{...}}`
-- 错误：400 `VALIDATION_ERROR`；404 `NOT_FOUND`
+- 说明：调整库存。
+- 请求体：`{"stock":5}`。
+- 响应 200：更新后的图书对象。
+- 错误 400 `VALIDATION_ERROR`：id 非法或 stock 为负。
+- 错误 404 `NOT_FOUND`：图书不存在。
 
-## 错误码汇总
-| 错误码 | HTTP 状态 | 说明 |
-| --- | --- | --- |
-| VALIDATION_ERROR | 400 | 参数校验失败 |
-| NOT_FOUND | 404 | 资源不存在 |
-| INTERNAL_ERROR | 500 | 服务内部错误 |
-
-## CORS
-- 允许来源：`http://localhost:5173`、`http://localhost:5174`
-- 允许方法：GET、POST、PATCH、DELETE、OPTIONS
-- 允许头：Content-Type
+## GET / 与 GET /static/
+- 说明：静态页面与资源托管，返回前端页面。

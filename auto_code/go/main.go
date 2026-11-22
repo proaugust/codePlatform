@@ -6,7 +6,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,15 +18,14 @@ type Book struct {
 	Stock  int    `json:"stock"`
 }
 
-type createBookRequest struct {
-	ID     *int64 `json:"id"`
+type bookRequest struct {
 	Title  string `json:"title"`
 	Author string `json:"author"`
 	Stock  int    `json:"stock"`
 }
 
 type stockRequest struct {
-	Delta *int `json:"delta"`
+	Stock *int `json:"stock"`
 }
 
 type errorBody struct {
@@ -39,10 +37,6 @@ type errorEnvelope struct {
 	Error errorBody `json:"error"`
 }
 
-type dataEnvelope struct {
-	Data interface{} `json:"data"`
-}
-
 type apiError struct {
 	status  int
 	code    string
@@ -52,10 +46,10 @@ type apiError struct {
 func (e *apiError) Error() string { return e.message }
 
 var (
-	errInvalidArgument = &apiError{http.StatusBadRequest, "VALIDATION_ERROR", "请求参数非法"}
-	errInvalidID       = &apiError{http.StatusBadRequest, "VALIDATION_ERROR", "图书 id 必须为大于 0 的整数"}
-	errNotFound        = &apiError{http.StatusNotFound, "NOT_FOUND", "图书不存在"}
-	errInternal        = &apiError{http.StatusInternalServerError, "INTERNAL_ERROR", "服务内部错误"}
+	errValidation = &apiError{http.StatusBadRequest, "VALIDATION_ERROR", "请求参数非法"}
+	errInvalidID  = &apiError{http.StatusBadRequest, "VALIDATION_ERROR", "图书 id 必须为大于 0 的整数"}
+	errNotFound   = &apiError{http.StatusNotFound, "NOT_FOUND", "图书不存在"}
+	errInternal   = &apiError{http.StatusInternalServerError, "INTERNAL_ERROR", "服务内部错误"}
 )
 
 type Store struct {
@@ -76,7 +70,13 @@ func (s *Store) List() []*Book {
 		cp := *b
 		out = append(out, &cp)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	for i := 0; i < len(out); i++ {
+		for j := i + 1; j < len(out); j++ {
+			if out[j].ID < out[i].ID {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+	}
 	return out
 }
 
@@ -91,35 +91,58 @@ func (s *Store) Get(id int64) (*Book, error) {
 	return &cp, nil
 }
 
-func (s *Store) Create(req createBookRequest) (*Book, error) {
+func validateBook(req bookRequest) (string, string, error) {
 	title := strings.TrimSpace(req.Title)
 	author := strings.TrimSpace(req.Author)
-	if title == "" || author == "" || req.Stock < 0 {
-		return nil, errInvalidArgument
+	if title == "" || req.Stock < 0 {
+		return "", "", errValidation
 	}
-	if req.ID != nil && *req.ID <= 0 {
-		return nil, errInvalidID
+	return title, author, nil
+}
+
+func (s *Store) Create(req bookRequest) (*Book, error) {
+	title, author, err := validateBook(req)
+	if err != nil {
+		return nil, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	b := &Book{ID: s.nextID, Title: title, Author: author, Stock: req.Stock}
-	s.nextID++
 	s.books[b.ID] = b
+	s.nextID++
 	cp := *b
 	return &cp, nil
 }
 
-func (s *Store) UpdateStock(id int64, delta int) (*Book, error) {
+func (s *Store) Update(id int64, req bookRequest) (*Book, error) {
+	title, author, err := validateBook(req)
+	if err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	b, ok := s.books[id]
 	if !ok {
 		return nil, errNotFound
 	}
-	if b.Stock+delta < 0 {
-		return nil, errInvalidArgument
+	b.Title = title
+	b.Author = author
+	b.Stock = req.Stock
+	cp := *b
+	return &cp, nil
+}
+
+func (s *Store) SetStock(id int64, stock int) (*Book, error) {
+	if stock < 0 {
+		return nil, errValidation
 	}
-	b.Stock += delta
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, ok := s.books[id]
+	if !ok {
+		return nil, errNotFound
+	}
+	b.Stock = stock
 	cp := *b
 	return &cp, nil
 }
@@ -134,10 +157,6 @@ func (s *Store) Delete(id int64) error {
 	return nil
 }
 
-type Server struct {
-	store *Store
-}
-
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
@@ -147,120 +166,47 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 }
 
 func writeError(w http.ResponseWriter, err error) {
-	ae := errInternal
-	var target *apiError
-	if errors.As(err, &target) {
-		ae = target
+	var ae *apiError
+	if !errors.As(err, &ae) {
+		log.Printf("internal error: %v", err)
+		ae = errInternal
 	}
 	writeJSON(w, ae.status, errorEnvelope{Error: errorBody{Code: ae.code, Message: ae.message}})
 }
 
-func decodeBody(w http.ResponseWriter, r *http.Request, dst interface{}) error {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	dec := json.NewDecoder(r.Body)
-	if err := dec.Decode(dst); err != nil {
-		return errInvalidArgument
-	}
-	return nil
-}
-
 func parseID(r *http.Request) (int64, error) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	raw := r.PathValue("id")
+	id, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || id <= 0 {
 		return 0, errInvalidID
 	}
 	return id, nil
 }
 
-func (s *Server) health(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+func decodeBody(r *http.Request, v interface{}) error {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		return errValidation
+	}
+	return nil
 }
 
-func (s *Server) listBooks(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, dataEnvelope{Data: s.store.List()})
-}
-
-func (s *Server) getBook(w http.ResponseWriter, r *http.Request) {
-	id, err := parseID(r)
-	if err != nil {
-		writeError(w, err)
-		return
+func cors(next http.Handler) http.Handler {
+	allowed := map[string]bool{
+		"http://localhost:5173": true,
+		"http://localhost:5174": true,
+		"http://localhost:5175": true,
+		"http://127.0.0.1:5173": true,
+		"http://127.0.0.1:5174": true,
+		"http://127.0.0.1:5175": true,
 	}
-	b, err := s.store.Get(id)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, dataEnvelope{Data: b})
-}
-
-func (s *Server) createBook(w http.ResponseWriter, r *http.Request) {
-	var req createBookRequest
-	if err := decodeBody(w, r, &req); err != nil {
-		writeError(w, err)
-		return
-	}
-	b, err := s.store.Create(req)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, dataEnvelope{Data: b})
-}
-
-func (s *Server) updateStock(w http.ResponseWriter, r *http.Request) {
-	id, err := parseID(r)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	var req stockRequest
-	if err := decodeBody(w, r, &req); err != nil {
-		writeError(w, err)
-		return
-	}
-	if req.Delta == nil {
-		writeError(w, errInvalidArgument)
-		return
-	}
-	b, err := s.store.UpdateStock(id, *req.Delta)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, dataEnvelope{Data: b})
-}
-
-func (s *Server) deleteBook(w http.ResponseWriter, r *http.Request) {
-	id, err := parseID(r)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	if err := s.store.Delete(id); err != nil {
-		writeError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"code":    "OK",
-		"message": "deleted",
-		"data":    map[string]int64{"id": id},
-	})
-}
-
-var allowedOrigins = map[string]bool{
-	"http://localhost:5173": true,
-	"http://localhost:5174": true,
-	"http://localhost:5175": true,
-}
-
-func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if allowedOrigins[origin] {
+		if allowed[origin] {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		}
 		if r.Method == http.MethodOptions {
@@ -271,134 +217,118 @@ func withCORS(next http.Handler) http.Handler {
 	})
 }
 
-const indexHTML = `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>图书管理</title>
-<style>
-body{font-family:system-ui,sans-serif;margin:0;padding:24px;background:#f7f7f8;color:#222}
-h1{font-size:20px;margin:0 0 16px}
-table{border-collapse:collapse;width:100%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.08)}
-th,td{padding:10px 12px;border-bottom:1px solid #eee;text-align:left;font-size:14px}
-th{background:#fafafa;font-weight:600}
-tr.selected{background:#eef5ff}
-button{cursor:pointer;border:1px solid #ccc;background:#fff;border-radius:6px;padding:6px 12px;font-size:13px}
-button.primary{background:#2563eb;border-color:#2563eb;color:#fff}
-button.danger{background:#dc2626;border-color:#dc2626;color:#fff}
-button:disabled{opacity:.5;cursor:not-allowed}
-.toolbar{display:flex;gap:8px;margin-bottom:12px;align-items:center}
-#msg{margin-left:8px;font-size:13px}
-#msg.err{color:#dc2626}
-#msg.ok{color:#16a34a}
-.form{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
-.form input{padding:6px 8px;border:1px solid #ccc;border-radius:6px;font-size:13px}
-</style>
-</head>
-<body>
-<h1>图书管理</h1>
-<div class="form">
-<input id="title" placeholder="书名">
-<input id="author" placeholder="作者">
-<input id="stock" type="number" placeholder="库存" value="0" style="width:90px">
-<button class="primary" id="addBtn">新增</button>
-</div>
-<div class="toolbar">
-<button class="danger" id="delBtn" disabled>删除选中</button>
-<span id="msg"></span>
-</div>
-<table>
-<thead><tr><th></th><th>ID</th><th>书名</th><th>作者</th><th>库存</th></tr></thead>
-<tbody id="rows"></tbody>
-</table>
-<script>
-const rows=document.getElementById('rows');
-const delBtn=document.getElementById('delBtn');
-const msg=document.getElementById('msg');
-let selected=null;
-function setMsg(t,ok){msg.textContent=t||'';msg.className=ok?'ok':'err';}
-async function load(){
-  try{
-    const r=await fetch('/api/books');
-    const j=await r.json();
-    const list=(j&&j.data)||[];
-    rows.innerHTML='';
-    selected=null;delBtn.disabled=true;
-    if(!list.length){rows.innerHTML='<tr><td colspan="5" style="color:#888">暂无图书</td></tr>';return;}
-    for(const b of list){
-      const tr=document.createElement('tr');
-      tr.innerHTML='<td><input type="radio" name="sel"></td><td>'+b.id+'</td><td>'+esc(b.title)+'</td><td>'+esc(b.author)+'</td><td>'+b.stock+'</td>';
-      tr.querySelector('input').addEventListener('change',()=>{
-        rows.querySelectorAll('tr').forEach(x=>x.classList.remove('selected'));
-        tr.classList.add('selected');
-        selected=b;delBtn.disabled=false;
-      });
-      rows.appendChild(tr);
-    }
-  }catch(e){setMsg('加载失败: '+e.message,false);}
-}
-function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-delBtn.addEventListener('click',async()=>{
-  if(!selected)return;
-  if(!confirm('确认删除图书「'+selected.title+'」？'))return;
-  try{
-    const r=await fetch('/api/books/'+selected.id,{method:'DELETE'});
-    const j=await r.json().catch(()=>({}));
-    if(!r.ok){
-      const m=(j&&j.error&&j.error.message)||('删除失败('+r.status+')');
-      setMsg(m,false);return;
-    }
-    setMsg('删除成功',true);
-    await load();
-  }catch(e){setMsg('删除失败: '+e.message,false);}
-});
-document.getElementById('addBtn').addEventListener('click',async()=>{
-  const title=document.getElementById('title').value.trim();
-  const author=document.getElementById('author').value.trim();
-  const stock=parseInt(document.getElementById('stock').value||'0',10);
-  try{
-    const r=await fetch('/api/books',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title,author,stock})});
-    const j=await r.json().catch(()=>({}));
-    if(!r.ok){
-      const m=(j&&j.error&&j.error.message)||('新增失败('+r.status+')');
-      setMsg(m,false);return;
-    }
-    setMsg('新增成功',true);
-    document.getElementById('title').value='';
-    document.getElementById('author').value='';
-    document.getElementById('stock').value='0';
-    await load();
-  }catch(e){setMsg('新增失败: '+e.message,false);}
-});
-load();
-</script>
-</body>
-</html>`
-
-func (s *Server) index(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(indexHTML))
-}
-
 func main() {
-	srv := &Server{store: NewStore()}
+	store := NewStore()
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", srv.health)
-	mux.HandleFunc("GET /{$}", srv.index)
-	mux.HandleFunc("GET /api/books", srv.listBooks)
-	mux.HandleFunc("POST /api/books", srv.createBook)
-	mux.HandleFunc("GET /api/books/{id}", srv.getBook)
-	mux.HandleFunc("DELETE /api/books/{id}", srv.deleteBook)
-	mux.HandleFunc("PATCH /api/books/{id}/stock", srv.updateStock)
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8072"
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+
+	mux.HandleFunc("GET /api/books", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, store.List())
+	})
+
+	mux.HandleFunc("POST /api/books", func(w http.ResponseWriter, r *http.Request) {
+		var req bookRequest
+		if err := decodeBody(r, &req); err != nil {
+			writeError(w, err)
+			return
+		}
+		b, err := store.Create(req)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, b)
+	})
+
+	mux.HandleFunc("GET /api/books/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id, err := parseID(r)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		b, err := store.Get(id)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, b)
+	})
+
+	mux.HandleFunc("PUT /api/books/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id, err := parseID(r)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		var req bookRequest
+		if err := decodeBody(r, &req); err != nil {
+			writeError(w, err)
+			return
+		}
+		b, err := store.Update(id, req)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, b)
+	})
+
+	mux.HandleFunc("DELETE /api/books/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id, err := parseID(r)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		if err := store.Delete(id); err != nil {
+			writeError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	mux.HandleFunc("PATCH /api/books/{id}/stock", func(w http.ResponseWriter, r *http.Request) {
+		id, err := parseID(r)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		var req stockRequest
+		if err := decodeBody(r, &req); err != nil {
+			writeError(w, err)
+			return
+		}
+		if req.Stock == nil {
+			writeError(w, errValidation)
+			return
+		}
+		b, err := store.SetStock(id, *req.Stock)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, b)
+	})
+
+	staticDir := "static"
+	if _, err := os.Stat(staticDir); err == nil {
+		mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir(staticDir))))
 	}
-	addr := ":" + port
+
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		path := staticDir + "/index.html"
+		if _, err := os.Stat(path); err != nil {
+			writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "message": "autocode book service"})
+			return
+		}
+		http.ServeFile(w, r, path)
+	})
+
+	addr := ":8072"
 	log.Printf("listening on %s", addr)
-	if err := http.ListenAndServe(addr, withCORS(mux)); err != nil {
+	if err := http.ListenAndServe(addr, cors(mux)); err != nil {
 		log.Fatal(err)
 	}
 }

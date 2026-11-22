@@ -24,6 +24,7 @@ RUN_STATES = frozenset(
         "AWAITING_APPROVAL",
         "CODE",
         "VALIDATE",
+        "FRONTEND",
         "REVIEW",
         "DONE",
         "FAILED",

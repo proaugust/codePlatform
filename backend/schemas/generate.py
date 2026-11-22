@@ -61,12 +61,22 @@ class GenerateResponse(BaseModel):
     frontend_error: str | None = None
 
 
+class RunStepItem(BaseModel):
+    state: str
+    at: str | None = None
+    message: str | None = None
+    repair_attempt: int | None = None
+
+
 class RunStatusResponse(BaseModel):
     lang: str
     state: str
     created_at: str | None = None
     updated_at: str | None = None
     error: str | None = None
+    message: str | None = None
+    repair_attempt: int | None = None
+    steps: list[RunStepItem] = Field(default_factory=list)
     auto_approve_plan: bool = True
     plan_approved: bool = False
     plan_summary: str | None = None

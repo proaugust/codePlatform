@@ -11,6 +11,9 @@ export default defineConfig({
         target: 'http://127.0.0.1:8001',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ''),
+        // SSE /run/events 长连接，避免代理过早断开
+        timeout: 0,
+        proxyTimeout: 0,
       },
     },
   },

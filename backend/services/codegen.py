@@ -241,6 +241,46 @@ def _read_existing_snippet(root: Path, rel: str, *, max_chars: int = 6000) -> st
     return text
 
 
+def expand_repair_paths(root: Path, paths: list[str], *, max_files: int = 6) -> list[str]:
+    """报错文件 + 同目录 sibling 源文件（补 undefined helper 用），上限 max_files。"""
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in paths:
+        norm = str(raw or "").replace("\\", "/").strip().lstrip("./")
+        if not norm or norm in seen:
+            continue
+        seen.add(norm)
+        out.append(norm)
+    dirs = {str(Path(p).parent).replace("\\", "/") for p in out}
+    for d in sorted(dirs):
+        dir_path = root if d in {".", ""} else root / d
+        if not dir_path.is_dir():
+            continue
+        try:
+            children = sorted(dir_path.iterdir(), key=lambda p: p.name)
+        except OSError:
+            continue
+        for child in children:
+            if not child.is_file():
+                continue
+            if child.suffix not in {".go", ".java"}:
+                continue
+            name = child.name
+            if name.endswith("_test.go") or name.endswith("Test.java"):
+                continue
+            try:
+                rel = child.relative_to(root).as_posix()
+            except ValueError:
+                continue
+            if rel in seen:
+                continue
+            seen.add(rel)
+            out.append(rel)
+            if len(out) >= max_files:
+                return out[:max_files]
+    return out[:max_files]
+
+
 def _greenfield_batches(lang: str) -> list[list[str]]:
     if lang == "java":
         return [
@@ -309,7 +349,13 @@ async def _generate_file_batch(
     return _write_files(root, files, allow_paths=allow)
 
 
-async def generate_project(lang: str, spec: str | None = None, *, use_docs: bool = True) -> dict[str, Any]:
+async def generate_project(
+    lang: str,
+    spec: str | None = None,
+    *,
+    use_docs: bool = True,
+    repair_paths: list[str] | None = None,
+) -> dict[str, Any]:
     lang = lang.lower().strip()
     if lang not in SUPPORTED_LANGS:
         raise CodegenError(f"不支持的语言: {lang}")
@@ -322,6 +368,8 @@ async def generate_project(lang: str, spec: str | None = None, *, use_docs: bool
 
     plan = ir.read_change_plan(lang) if use_docs else None
     incremental = bool(plan and str(plan.get("mode") or "") == "incremental" and _project_exists(lang, root))
+    # 校验修复：只改报错文件（含同包 sibling），不重跑整份 plan
+    repair_mode = bool(repair_paths) and _project_exists(lang, root)
 
     doc_spec = ""
     if use_docs:
@@ -340,8 +388,29 @@ async def generate_project(lang: str, spec: str | None = None, *, use_docs: bool
             raise CodegenError("请先分析需求生成 docs/，或直接提供 spec")
         final_spec = raw_spec
 
+    if repair_mode:
+        # 修复轮：砍掉冗长 docs，优先靠 repair hints + 当前文件
+        final_spec = (raw_spec or doc_spec or final_spec)[:4000]
+
     written: list[str] = []
-    if incremental:
+    if repair_mode:
+        targets = expand_repair_paths(root, list(repair_paths or []))
+        if not targets:
+            raise CodegenError("修复模式未解析到目标文件")
+        logger.info("定点修复 lang=%s files=%d targets=%s", lang, len(targets), targets)
+        for batch in _chunked(targets, 1):
+            written.extend(
+                await _generate_file_batch(
+                    lang=lang,
+                    port=port,
+                    root=root,
+                    paths=batch,
+                    final_spec=final_spec,
+                    plan=plan,
+                    incremental=True,
+                )
+            )
+    elif incremental:
         targets = _plan_target_files(plan)
         if not targets:
             targets = _fallback_existing_sources(lang, root)
@@ -413,10 +482,11 @@ async def generate_project(lang: str, spec: str | None = None, *, use_docs: bool
         (root / "SPEC.md").write_text(raw_spec + "\n", encoding="utf-8", newline="\n")
 
     endpoints = _endpoints_from_plan(plan)
+    mode = "repair" if repair_mode else ("incremental" if incremental else "greenfield")
     logger.info(
         "生成完成 lang=%s mode=%s files=%d port=%s",
         lang,
-        "incremental" if incremental else "greenfield",
+        mode,
         len(written),
         port,
     )
@@ -427,7 +497,7 @@ async def generate_project(lang: str, spec: str | None = None, *, use_docs: bool
         "files": written,
         "endpoints": endpoints,
         "used_docs": bool(doc_spec),
-        "mode": "incremental" if incremental else "greenfield",
+        "mode": mode,
     }
 
 

@@ -61,11 +61,6 @@
       },
       {
         "method": "*",
-        "path": "GET /{$}",
-        "source": "main.go"
-      },
-      {
-        "method": "*",
         "path": "GET /api/books",
         "source": "main.go"
       },
@@ -81,6 +76,11 @@
       },
       {
         "method": "*",
+        "path": "PUT /api/books/{id}",
+        "source": "main.go"
+      },
+      {
+        "method": "*",
         "path": "DELETE /api/books/{id}",
         "source": "main.go"
       },
@@ -90,13 +90,18 @@
         "source": "main.go"
       },
       {
-        "method": "GET",
-        "path": "/health",
+        "method": "*",
+        "path": "GET /static/",
+        "source": "main.go"
+      },
+      {
+        "method": "*",
+        "path": "GET /{$}",
         "source": "main.go"
       },
       {
         "method": "GET",
-        "path": "/{$}",
+        "path": "/health",
         "source": "main.go"
       },
       {
@@ -111,6 +116,11 @@
       },
       {
         "method": "GET",
+        "path": "/api/books/{id}",
+        "source": "main.go"
+      },
+      {
+        "method": "PUT",
         "path": "/api/books/{id}",
         "source": "main.go"
       },
@@ -125,6 +135,16 @@
         "source": "main.go"
       },
       {
+        "method": "GET",
+        "path": "/static/",
+        "source": "main.go"
+      },
+      {
+        "method": "GET",
+        "path": "/{$}",
+        "source": "main.go"
+      },
+      {
         "method": "*",
         "path": "GET /api/books",
         "source": "internal/handler/book_handler.go"
@@ -137,6 +157,11 @@
       {
         "method": "*",
         "path": "GET /api/books/{id}",
+        "source": "internal/handler/book_handler.go"
+      },
+      {
+        "method": "*",
+        "path": "PUT /api/books/{id}",
         "source": "internal/handler/book_handler.go"
       },
       {
@@ -161,6 +186,11 @@
       },
       {
         "method": "GET",
+        "path": "/api/books/{id}",
+        "source": "internal/handler/book_handler.go"
+      },
+      {
+        "method": "PUT",
         "path": "/api/books/{id}",
         "source": "internal/handler/book_handler.go"
       },

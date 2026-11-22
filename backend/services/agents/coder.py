@@ -15,18 +15,28 @@ async def run_coder(
     *,
     use_docs: bool = True,
     repair_hints: str | None = None,
+    repair_paths: list[str] | None = None,
 ) -> dict[str, Any]:
     """调用代码生成引擎；注入 change_plan 与可选修复提示。"""
     plan = ir.read_change_plan(lang)
+    repairing = bool(repair_hints or repair_paths)
     plan_context = ""
     if plan:
-        plan_context = (
-            "\n\n---\n\n# Change Plan (approved tasks)\n\n"
-            f"summary: {plan.get('summary')}\n"
-            f"modules: {plan.get('modules')}\n"
-            f"apis: {plan.get('apis')}\n"
-            f"tasks: {plan.get('tasks')}\n"
-        )
+        if repairing:
+            # 修复轮：只带摘要+API，避免把整份 tasks 再喂一遍
+            plan_context = (
+                "\n\n---\n\n# Change Plan (compact)\n\n"
+                f"summary: {plan.get('summary')}\n"
+                f"apis: {plan.get('apis')}\n"
+            )
+        else:
+            plan_context = (
+                "\n\n---\n\n# Change Plan (approved tasks)\n\n"
+                f"summary: {plan.get('summary')}\n"
+                f"modules: {plan.get('modules')}\n"
+                f"apis: {plan.get('apis')}\n"
+                f"tasks: {plan.get('tasks')}\n"
+            )
 
     extra = (spec or "").strip()
     if plan_context:
@@ -35,9 +45,19 @@ async def run_coder(
         extra = (extra or "") + "\n\n---\n\n# Validation repair hints\n\n" + repair_hints
 
     try:
-        result = await generate_project(lang, extra or None, use_docs=use_docs)
+        result = await generate_project(
+            lang,
+            extra or None,
+            use_docs=use_docs,
+            repair_paths=list(repair_paths) if repair_paths else None,
+        )
     except CodegenError:
         raise
 
-    logger.info("Coder 完成 lang=%s files=%d", lang, len(result.get("files") or []))
+    logger.info(
+        "Coder 完成 lang=%s files=%d repair=%s",
+        lang,
+        len(result.get("files") or []),
+        bool(repair_paths),
+    )
     return result

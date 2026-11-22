@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from backend.core.config import LANG_PORTS, settings
@@ -38,6 +41,7 @@ from backend.schemas.generate import (
     RuntimeLogResponse,
     RuntimeStopResponse,
     RunStatusResponse,
+    RunStepItem,
     StatusResponse,
 )
 from backend.services.agents.elicitor import (
@@ -63,6 +67,8 @@ from backend.services.frontend_codegen import (
     start_frontend_dev,
 )
 from backend.services.orchestrator import OrchestratorError, confirm_plan, get_run_status, run_generate
+from backend.services.run_events import subscribe as subscribe_run_events
+from backend.services.run_events import unsubscribe as unsubscribe_run_events
 from backend.services.platform_prefs import (
     MAX_MAX_TURNS,
     MAX_TREE_INDENT_CH,
@@ -111,6 +117,49 @@ def _normalize_target(target: str) -> str:
     if t not in SUPPORTED_LANGS:
         raise HTTPException(status_code=400, detail=f"不支持的 target: {target}，可选: java, go")
     return t
+
+
+def _run_status_response(result: dict[str, Any]) -> RunStatusResponse:
+    steps_raw = result.get("steps") or []
+    steps: list[RunStepItem] = []
+    if isinstance(steps_raw, list):
+        for item in steps_raw:
+            if not isinstance(item, dict) or not item.get("state"):
+                continue
+            steps.append(
+                RunStepItem(
+                    state=str(item["state"]),
+                    at=item.get("at"),
+                    message=item.get("message"),
+                    repair_attempt=item.get("repair_attempt"),
+                )
+            )
+    repair_attempt = result.get("repair_attempt")
+    try:
+        repair_int = int(repair_attempt) if repair_attempt is not None else None
+    except (TypeError, ValueError):
+        repair_int = None
+    return RunStatusResponse(
+        lang=result["lang"],
+        state=result["state"],
+        created_at=result.get("created_at"),
+        updated_at=result.get("updated_at"),
+        error=result.get("error"),
+        message=result.get("message"),
+        repair_attempt=repair_int,
+        steps=steps,
+        auto_approve_plan=bool(result.get("auto_approve_plan")),
+        plan_approved=bool(result.get("plan_approved")),
+        plan_summary=result.get("plan_summary"),
+        task_count=int(result.get("task_count") or 0),
+        validation_ok=result.get("validation_ok"),
+        repair_count=int(result.get("repair_count") or 0),
+        ir_dir=result.get("ir_dir"),
+    )
+
+
+def _sse_pack(event: str, data: dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 def _normalize_tree_target(target: str) -> str:
@@ -376,19 +425,61 @@ async def plan_confirm(body: PlanConfirmBody) -> RunStatusResponse:
         result = confirm_plan(target)
     except OrchestratorError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    return RunStatusResponse(
-        lang=result["lang"],
-        state=result["state"],
-        created_at=result.get("created_at"),
-        updated_at=result.get("updated_at"),
-        error=result.get("error"),
-        auto_approve_plan=bool(result.get("auto_approve_plan")),
-        plan_approved=bool(result.get("plan_approved")),
-        plan_summary=result.get("plan_summary"),
-        task_count=int(result.get("task_count") or 0),
-        validation_ok=result.get("validation_ok"),
-        repair_count=int(result.get("repair_count") or 0),
-        ir_dir=result.get("ir_dir"),
+    return _run_status_response(result)
+
+
+@router.get("/{target}/run/events")
+async def run_events(target: str, request: Request) -> StreamingResponse:
+    """SSE：订阅 agent 流水线步骤；连上先推当前快照。"""
+    target = _normalize_target(target)
+    queue = subscribe_run_events(target)
+
+    async def event_gen():
+        try:
+            try:
+                snap = get_run_status(target)
+                yield _sse_pack(
+                    "step",
+                    {
+                        "type": "snapshot",
+                        "lang": snap["lang"],
+                        "state": snap["state"],
+                        "message": snap.get("message"),
+                        "error": snap.get("error"),
+                        "repair_attempt": snap.get("repair_attempt"),
+                        "updated_at": snap.get("updated_at"),
+                        "steps": snap.get("steps") or [],
+                    },
+                )
+            except OrchestratorError as e:
+                yield _sse_pack("error", {"type": "error", "lang": target, "error": str(e), "state": "FAILED"})
+
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    payload = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield _sse_pack("ping", {"type": "ping"})
+                    continue
+                if payload is None:
+                    break
+                event_name = "error" if payload.get("type") == "error" or payload.get("state") == "FAILED" else "step"
+                yield _sse_pack(event_name, payload)
+                if payload.get("state") in {"DONE", "FAILED"}:
+                    # 终点后仍保持连接，直到客户端关闭（可看最终态）；不强制断开
+                    pass
+        finally:
+            unsubscribe_run_events(target, queue)
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -399,20 +490,7 @@ async def run_status(target: str) -> RunStatusResponse:
         result = get_run_status(target)
     except OrchestratorError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    return RunStatusResponse(
-        lang=result["lang"],
-        state=result["state"],
-        created_at=result.get("created_at"),
-        updated_at=result.get("updated_at"),
-        error=result.get("error"),
-        auto_approve_plan=bool(result.get("auto_approve_plan")),
-        plan_approved=bool(result.get("plan_approved")),
-        plan_summary=result.get("plan_summary"),
-        task_count=int(result.get("task_count") or 0),
-        validation_ok=result.get("validation_ok"),
-        repair_count=int(result.get("repair_count") or 0),
-        ir_dir=result.get("ir_dir"),
-    )
+    return _run_status_response(result)
 
 
 @router.post("/generate", response_model=GenerateResponse)

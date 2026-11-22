@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -14,8 +15,23 @@ from backend.services.agents.validator import run_validator
 from backend.services.analyze import docs_dir, read_docs
 from backend.services.codegen import CodegenError, SUPPORTED_LANGS
 from backend.services.frontend_codegen import FrontendCodegenError, generate_frontend
+from backend.services.run_events import publish as publish_run_event
 
 logger = logging.getLogger(__name__)
+
+_STATE_MESSAGES: dict[str, str] = {
+    "INIT": "待命",
+    "INTEL": "扫描仓库",
+    "REQUIRE": "整理需求文档",
+    "PLAN": "生成改动计划",
+    "AWAITING_APPROVAL": "计划待确认",
+    "CODE": "生成/修改代码",
+    "VALIDATE": "编译校验",
+    "FRONTEND": "生成前端",
+    "REVIEW": "写变更报告",
+    "DONE": "完成",
+    "FAILED": "失败",
+}
 
 
 class OrchestratorError(RuntimeError):
@@ -26,18 +42,85 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _default_message(state: str, *, repair_attempt: int | None = None, error: str | None = None) -> str:
+    base = _STATE_MESSAGES.get(state, state)
+    if state == "FAILED" and error:
+        return f"{base}：{error[:200]}"
+    if repair_attempt is not None and repair_attempt > 0 and state in {"CODE", "VALIDATE"}:
+        return f"{base} · 修复第 {repair_attempt} 轮"
+    return base
+
+
 def _set_run(lang: str, state: str, **extra: Any) -> dict[str, Any]:
     prev = ir.read_run(lang) or {}
+    now = _now()
+    # 新分析从 INTEL 起清空修复轮次；其余沿用显式传入或上次值
+    if "repair_attempt" in extra:
+        repair_attempt = extra.get("repair_attempt")
+    elif state == "INTEL":
+        repair_attempt = None
+    else:
+        repair_attempt = prev.get("repair_attempt")
+    try:
+        repair_int = int(repair_attempt) if repair_attempt is not None else None
+    except (TypeError, ValueError):
+        repair_int = None
+
+    message = extra.pop("message", None)
+    if message is None:
+        message = _default_message(
+            state,
+            repair_attempt=repair_int,
+            error=extra.get("error") if "error" in extra else prev.get("error"),
+        )
+
+    steps: list[Any]
+    if state == "INTEL":
+        steps = []
+    else:
+        steps = list(prev.get("steps") or [])
+        if not isinstance(steps, list):
+            steps = []
+
+    step_entry = {
+        "state": state,
+        "at": now,
+        "message": message,
+    }
+    if repair_int is not None:
+        step_entry["repair_attempt"] = repair_int
+    steps.append(step_entry)
+
     data = {
         **prev,
         "lang": lang,
         "state": state,
-        "updated_at": _now(),
+        "updated_at": now,
+        "message": message,
+        "steps": steps,
+        "repair_attempt": repair_int,
         **extra,
     }
+    # extra 可能再次带入 repair_attempt；最终以规范化值为准
+    data["repair_attempt"] = repair_int
     if "created_at" not in data:
-        data["created_at"] = _now()
+        data["created_at"] = now
     ir.write_run(lang, data)
+
+    event_type = "error" if state == "FAILED" else "step"
+    publish_run_event(
+        lang,
+        {
+            "type": event_type,
+            "lang": lang,
+            "state": state,
+            "message": message,
+            "error": data.get("error"),
+            "repair_attempt": data.get("repair_attempt"),
+            "updated_at": now,
+            "steps": steps,
+        },
+    )
     return data
 
 
@@ -48,18 +131,38 @@ def get_run_status(lang: str) -> dict[str, Any]:
     run = ir.read_run(lang) or {"lang": lang, "state": "INIT"}
     plan = ir.read_change_plan(lang)
     validation = ir.read_validation(lang)
+    steps = run.get("steps") if isinstance(run.get("steps"), list) else []
+    repair_hints = str((validation or {}).get("repair_hints") or "")
+    repair_hint_short = ""
+    if repair_hints:
+        # 给前端状态栏：优先 stderr 摘要
+        for line in repair_hints.splitlines():
+            s = line.strip()
+            if not s or s.startswith("command:") or s.startswith("returncode:") or s.startswith("stdout:"):
+                continue
+            if s.startswith("stderr:"):
+                continue
+            repair_hint_short = s
+            break
+        if not repair_hint_short:
+            repair_hint_short = repair_hints[:240]
     return {
         "lang": lang,
         "state": run.get("state", "INIT"),
         "created_at": run.get("created_at"),
         "updated_at": run.get("updated_at"),
         "error": run.get("error"),
+        "message": run.get("message") or _STATE_MESSAGES.get(str(run.get("state") or "INIT"), ""),
+        "repair_attempt": run.get("repair_attempt"),
+        "steps": steps,
         "auto_approve_plan": settings.auto_approve_plan,
         "plan_approved": bool((plan or {}).get("approved")),
         "plan_summary": (plan or {}).get("summary"),
         "task_count": len((plan or {}).get("tasks") or []),
         "validation_ok": (validation or {}).get("ok"),
         "repair_count": (validation or {}).get("repair_count", 0),
+        "repair_hint": repair_hint_short[:320] if repair_hint_short else None,
+        "repair_files": list((validation or {}).get("repair_files") or []),
         "ir_dir": str(ir.ir_dir(lang)),
         "run": run,
         "change_plan": plan,
@@ -240,18 +343,43 @@ async def run_generate(
 
     max_repairs = max(0, int(settings.validate_max_repairs))
     repair_hints: str | None = None
+    repair_paths: list[str] | None = None
+    prev_hints_fp: str | None = None
     last_result: dict[str, Any] | None = None
     validation: dict[str, Any] = {"ok": False, "repair_count": 0}
 
     try:
         for attempt in range(max_repairs + 1):
             _set_run(lang, "CODE", repair_attempt=attempt, error=None)
-            last_result = await run_coder(lang, spec, use_docs=use_docs, repair_hints=repair_hints)
+            last_result = await run_coder(
+                lang,
+                spec,
+                use_docs=use_docs,
+                repair_hints=repair_hints,
+                repair_paths=repair_paths,
+            )
 
             _set_run(lang, "VALIDATE", repair_attempt=attempt)
             validation = await run_validator(lang, repair_count=attempt)
             if validation.get("ok"):
                 break
+
+            hints = str(validation.get("repair_hints") or "")
+            hints_fp = hashlib.sha256(hints.encode("utf-8")).hexdigest() if hints else ""
+            # 连续两轮完全相同的编译错误 → 早停，避免空转烧 token
+            if prev_hints_fp is not None and hints_fp and hints_fp == prev_hints_fp:
+                snippet = hints[:400]
+                _set_run(
+                    lang,
+                    "FAILED",
+                    error=f"校验连续相同失败，已早停（第 {attempt} 轮）",
+                    validation_ok=False,
+                )
+                raise OrchestratorError(
+                    f"校验连续相同失败，已早停以避免浪费 token：{snippet}"
+                )
+            prev_hints_fp = hints_fp or prev_hints_fp
+
             if attempt >= max_repairs:
                 _set_run(
                     lang,
@@ -261,9 +389,11 @@ async def run_generate(
                 )
                 raise OrchestratorError(
                     f"校验失败且已达最大修复次数 {max_repairs}："
-                    f"{(validation.get('repair_hints') or '')[:500]}"
+                    f"{hints[:500]}"
                 )
-            repair_hints = validation.get("repair_hints") or "编译失败，请修复后重新生成完整工程。"
+            repair_hints = hints or "编译失败，请修复报错文件（可同包补 helper）。"
+            files = validation.get("repair_files")
+            repair_paths = [str(p) for p in files] if isinstance(files, list) and files else None
 
         assert last_result is not None
 

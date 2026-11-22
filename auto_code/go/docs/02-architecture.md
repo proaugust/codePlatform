@@ -1,25 +1,25 @@
 # 架构
 
 ## 分层
-- **Handler 层**（`internal/handler`）：HTTP 路由处理、参数解析与校验、JSON 响应封装、CORS、静态资源托管。
-- **Service 层**（`internal/service`）：业务规则（删除前存在性校验、错误语义映射），返回领域错误。
-- **Repository 层**（`internal/repository`）：内存存储读写，使用 `sync.RWMutex` 保证并发安全。
-- **Model 层**（`internal/model`）：图书实体定义。
+- **Handler 层**（`internal/handler`）：解析 HTTP 请求、路径参数、JSON 请求体，调用 Service，统一输出 JSON 与错误码；`response.go` 提供统一响应封装；`static.go` 托管静态页面。
+- **Service 层**（`internal/service`）：业务校验与编排，定义领域错误（`errors.go`），如 `ErrValidation`、`ErrNotFound`。
+- **Repository 层**（`internal/repository`）：内存数据存储，提供按 id 查询、更新、删除、列表等操作，使用互斥锁保证并发安全。
+- **Model 层**（`internal/model`）：`Book` 结构体（ID、Title、Author、Stock）。
 
-## 模块与技术选型
-- 语言/运行时：Go 1.22，module `example.com/autocode`。
-- Web：标准库 `net/http`，使用 `http.ServeMux` 的路径模式（`GET /api/books/{id}`、`DELETE /api/books/{id}`）。
-- 静态托管：`internal/handler/static.go` 提供 `/` 与 `/static/` 静态文件服务。
-- 并发：Repository 内 `sync.RWMutex`。
-- 前端：纯静态 HTML/CSS/JS（`fetch` 调用 API），无构建步骤。
-
-## 请求处理流程（删除）
-1. 前端选中图书，点击删除并二次确认。
-2. 发起 `DELETE /api/books/{id}`。
-3. Handler 解析并校验 `id`（必须为大于 0 的整数，否则 400 `VALIDATION_ERROR`）。
-4. Service 调用 Repository 删除；不存在返回 404 `NOT_FOUND`。
-5. 成功返回 200/204 与统一 JSON；前端刷新列表。
+## 技术选型
+- 语言：Go 1.22，module `example.com/autocode`。
+- Web：标准库 `net/http`，使用 Go 1.22 的 `ServeMux` 路径模式（`GET /api/books/{id}` 等）。
+- 存储：进程内内存（map + sync.RWMutex）。
+- 前端：静态 HTML/JS/CSS，由后端同端口托管于 `/` 与 `/static/`。
 
 ## 部署
-- 单进程二进制，监听 `:8072`，同时提供 API 与静态页面。
-- 访问入口：`http://localhost:8072/`；健康检查：`http://localhost:8072/health`。
+- 单进程监听 `:8072`，同时提供 API 与静态页面。
+- 启动方式：在「运行」页启动进程，访问 `http://localhost:8072/`。
+- CORS：允许 `http://localhost:5173`、`http://localhost:5174` 的跨域请求（便于 Vite 开发调试）。
+
+## 请求处理流程（修改图书）
+1. 路由匹配 `PUT /api/books/{id}`。
+2. Handler 解析 id，非法则返回 400 `VALIDATION_ERROR`。
+3. 解析 JSON 请求体，校验 title 非空、stock 非负。
+4. Service 调用 Repository 更新；不存在返回 404 `NOT_FOUND`。
+5. 返回 200 与更新后的图书 JSON。

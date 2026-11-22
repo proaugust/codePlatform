@@ -68,6 +68,23 @@ export type LangMeta = {
   frontend_port: number | null
   has_frontend: boolean
 }
+export type RunPipelineStep = {
+  state: string
+  at?: string | null
+  message?: string | null
+  repair_attempt?: number | null
+}
+export type RunPipeline = {
+  lang: Lang | string
+  state: string
+  message: string
+  error: string | null
+  repair_attempt: number | null
+  updated_at: string | null
+  steps: RunPipelineStep[]
+  /** 最近一次校验失败摘要（编译错误首行） */
+  repair_hint: string | null
+}
 
 const TARGET_KEY = 'platform_target'
 const FALLBACK_LANGS: LangMeta[] = [
@@ -117,6 +134,19 @@ const stoppingFrontend = ref(false)
 const readyToConclude = ref(false)
 const readyToPlan = ref(false)
 const pipelineNote = ref('')
+const runPipeline = ref<RunPipeline>({
+  lang: 'java',
+  state: 'INIT',
+  message: '',
+  error: null,
+  repair_attempt: null,
+  updated_at: null,
+  steps: [],
+  repair_hint: null,
+})
+const runEventsLive = ref(false)
+let runEventsSource: EventSource | null = null
+let runEventsRefCount = 0
 const restartInfo = ref<RestartResult | null>(null)
 const frontendStartInfo = ref<FrontendStartResult | null>(null)
 const runLogs = ref<RunLogItem[]>([])
@@ -193,7 +223,6 @@ const canPlan = computed(
     !busy.value &&
     (messages.value.some((m) => m.role === 'user') ||
       !!input.value.trim() ||
-      !!conclusionEdit.value.summary.trim() ||
       !!rollingSummary.value),
 )
 const canExecute = computed(() => !sessionClosed.value && planReady.value && !busy.value)
@@ -348,6 +377,110 @@ function clearDraft() {
   }
 }
 
+function applyRunPipelinePayload(data: Record<string, unknown>) {
+  const stepsRaw = Array.isArray(data.steps) ? data.steps : []
+  const steps: RunPipelineStep[] = stepsRaw
+    .filter((s): s is Record<string, unknown> => !!s && typeof s === 'object')
+    .map((s) => ({
+      state: String(s.state || ''),
+      at: typeof s.at === 'string' ? s.at : null,
+      message: typeof s.message === 'string' ? s.message : null,
+      repair_attempt:
+        typeof s.repair_attempt === 'number'
+          ? s.repair_attempt
+          : s.repair_attempt != null
+            ? Number(s.repair_attempt)
+            : null,
+    }))
+    .filter((s) => !!s.state)
+  const repair =
+    typeof data.repair_attempt === 'number'
+      ? data.repair_attempt
+      : data.repair_attempt != null
+        ? Number(data.repair_attempt)
+        : null
+  const repairHint =
+    typeof data.repair_hint === 'string' && data.repair_hint.trim()
+      ? data.repair_hint.trim()
+      : null
+  runPipeline.value = {
+    lang: String(data.lang || target.value),
+    state: String(data.state || 'INIT'),
+    message: typeof data.message === 'string' ? data.message : '',
+    error: typeof data.error === 'string' ? data.error : data.error == null ? null : String(data.error),
+    repair_attempt: Number.isFinite(repair as number) ? (repair as number) : null,
+    updated_at: typeof data.updated_at === 'string' ? data.updated_at : null,
+    steps,
+    repair_hint: repairHint,
+  }
+  if (runPipeline.value.message) {
+    pipelineNote.value = runPipeline.value.message
+  }
+}
+
+async function loadRunStatus() {
+  try {
+    const r = await fetch(`/api/agent/${target.value}/run`)
+    const data = await r.json()
+    if (!r.ok) return
+    applyRunPipelinePayload(data)
+  } catch {
+    /* ignore */
+  }
+}
+
+function forceCloseRunEvents() {
+  runEventsRefCount = 0
+  if (runEventsSource) {
+    runEventsSource.close()
+    runEventsSource = null
+  }
+  runEventsLive.value = false
+}
+
+function closeRunEvents() {
+  runEventsRefCount = Math.max(0, runEventsRefCount - 1)
+  if (runEventsRefCount > 0) return
+  forceCloseRunEvents()
+}
+
+function openRunEvents() {
+  runEventsRefCount += 1
+  if (runEventsSource) {
+    runEventsLive.value = true
+    return
+  }
+  const url = `/api/agent/${target.value}/run/events`
+  const es = new EventSource(url)
+  runEventsSource = es
+  runEventsLive.value = true
+
+  const onPayload = (ev: MessageEvent) => {
+    try {
+      const data = JSON.parse(String(ev.data || '{}')) as Record<string, unknown>
+      if (data.type === 'ping') return
+      applyRunPipelinePayload(data)
+    } catch {
+      /* ignore */
+    }
+  }
+  es.addEventListener('step', onPayload)
+  es.addEventListener('error', onPayload)
+  es.onerror = () => {
+    // 浏览器会自动重连；若主动 close 则 source 已空
+    if (runEventsSource !== es) return
+  }
+}
+
+async function withRunEvents<T>(fn: () => Promise<T>): Promise<T> {
+  openRunEvents()
+  try {
+    return await fn()
+  } finally {
+    closeRunEvents()
+  }
+}
+
 async function refreshStatus() {
   try {
     status.value = await (await fetch(`/api/agent/${target.value}/status`)).json()
@@ -435,7 +568,14 @@ async function saveMaxTurns(next: number) {
 async function loadWorkspace() {
   input.value = ''
   loadDraft()
-  await Promise.all([refreshStatus(), loadDocs(), loadElicit(), loadSessions(), loadPlatformSettings()])
+  await Promise.all([
+    refreshStatus(),
+    loadDocs(),
+    loadElicit(),
+    loadSessions(),
+    loadPlatformSettings(),
+    loadRunStatus(),
+  ])
   backendLog.value = ''
   frontendLog.value = ''
   backendListening.value = false
@@ -480,6 +620,7 @@ async function resolveTargetFromMeta() {
 async function switchTarget(next: Lang) {
   if (next === target.value || busy.value) return
   saveDraft()
+  forceCloseRunEvents()
   target.value = next
   try {
     localStorage.setItem(TARGET_KEY, next)
@@ -496,6 +637,16 @@ async function switchTarget(next: Lang) {
   elicitation.value = null
   sessions.value = []
   docs.value = []
+  runPipeline.value = {
+    lang: next,
+    state: 'INIT',
+    message: '',
+    error: null,
+    repair_attempt: null,
+    updated_at: null,
+    steps: [],
+    repair_hint: null,
+  }
   conclusionEdit.value = {
     summary: '',
     goals: [],
@@ -577,7 +728,7 @@ async function onPlan() {
   if (!canPlan.value) {
     error.value = sessionClosed.value
       ? '会话已关闭，请先「新开窗口」'
-      : '请先输入需求或编辑结论，再点「分析计划」'
+      : '请先输入需求，再点「分析计划」'
     return
   }
   planning.value = true
@@ -588,40 +739,43 @@ async function onPlan() {
   pipelineNote.value = '正在分析计划…'
   pushRunLog({ kind: 'info', title: '分析计划', message: pipelineNote.value })
   try {
-    const r = await fetch('/api/agent/elicit/plan', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        target: target.value,
-        content: note || null,
-        conclusion: conclusionEdit.value.summary.trim() ? conclusionEdit.value : null,
-      }),
-    })
-    const data = await r.json()
-    if (!r.ok) throw new Error(detailOf(data))
-    applyElicitation(data.elicitation)
-    docs.value = data.analyze?.files || []
-    activeDoc.value = 0
-    readyToConclude.value = false
-    readyToPlan.value = false
-    if (note) {
-      input.value = ''
-      clearDraft()
-    }
-    await Promise.all([refreshStatus(), loadSessions()])
-    pipelineNote.value = data.plan_ready ? '计划已就绪，可执行生成' : '计划已处理'
-    pushRunLog({
-      kind: 'info',
-      title: '计划完成',
-      message: pipelineNote.value,
-      detail: data.elicitation?.last_plan
-        ? JSON.stringify(data.elicitation.last_plan, null, 2)
-        : undefined,
+    await withRunEvents(async () => {
+      const r = await fetch('/api/agent/elicit/plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          target: target.value,
+          content: note || null,
+          conclusion: null,
+        }),
+      })
+      const data = await r.json()
+      if (!r.ok) throw new Error(detailOf(data))
+      applyElicitation(data.elicitation)
+      docs.value = data.analyze?.files || []
+      activeDoc.value = 0
+      readyToConclude.value = false
+      readyToPlan.value = false
+      if (note) {
+        input.value = ''
+        clearDraft()
+      }
+      await Promise.all([refreshStatus(), loadSessions(), loadRunStatus()])
+      pipelineNote.value = data.plan_ready ? '计划已就绪，可执行生成' : '计划已处理'
+      pushRunLog({
+        kind: 'info',
+        title: '计划完成',
+        message: pipelineNote.value,
+        detail: data.elicitation?.last_plan
+          ? JSON.stringify(data.elicitation.last_plan, null, 2)
+          : undefined,
+      })
     })
   } catch (e) {
     error.value = String(e)
     pipelineNote.value = ''
     pushRunLog({ kind: 'error', title: '分析计划失败', message: String(e) })
+    await loadRunStatus()
   } finally {
     planning.value = false
     analyzing.value = false
@@ -647,34 +801,37 @@ async function onExecute() {
   pipelineNote.value = '正在执行生成代码…'
   pushRunLog({ kind: 'info', title: '执行生成', message: pipelineNote.value })
   try {
-    const r = await fetch('/api/agent/elicit/execute', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ target: target.value }),
-    })
-    const data = await r.json()
-    if (!r.ok) throw new Error(detailOf(data))
-    applyElicitation(data.elicitation)
-    if (data.generate) result.value = data.generate
-    await refreshStatus()
-    const smokeMsg =
-      data.smoke && typeof data.smoke === 'object' && data.smoke.message
-        ? String(data.smoke.message)
-        : ''
-    pipelineNote.value = smokeMsg
-      ? `代码已生成。${smokeMsg}`
-      : '代码已生成（未自动启动，请到「运行」页启动）'
-    pushRunLog({
-      kind: 'info',
-      title: '生成完成',
-      message: pipelineNote.value,
-      detail: data.generate ? JSON.stringify(data.generate, null, 2) : undefined,
+    await withRunEvents(async () => {
+      const r = await fetch('/api/agent/elicit/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target: target.value }),
+      })
+      const data = await r.json()
+      if (!r.ok) throw new Error(detailOf(data))
+      applyElicitation(data.elicitation)
+      if (data.generate) result.value = data.generate
+      await Promise.all([refreshStatus(), loadRunStatus()])
+      const smokeMsg =
+        data.smoke && typeof data.smoke === 'object' && data.smoke.message
+          ? String(data.smoke.message)
+          : ''
+      pipelineNote.value = smokeMsg
+        ? `代码已生成。${smokeMsg}`
+        : '代码已生成（未自动启动，请到「运行」页启动）'
+      pushRunLog({
+        kind: 'info',
+        title: '生成完成',
+        message: pipelineNote.value,
+        detail: data.generate ? JSON.stringify(data.generate, null, 2) : undefined,
+      })
     })
   } catch (e) {
     const msg = String(e)
     error.value = msg
     pipelineNote.value = `执行生成失败：${msg}`
     pushRunLog({ kind: 'error', title: '执行生成失败', message: msg, detail: msg })
+    await loadRunStatus()
   } finally {
     executing.value = false
     generating.value = false
@@ -688,19 +845,25 @@ async function onPlanAndExecute() {
       ? '正在执行其它任务，请稍候'
       : sessionClosed.value
         ? '会话已关闭，请先「新开窗口」'
-        : '请先输入需求或编辑结论，再点「分析并改代码」'
+        : '请先输入需求，再点「分析并改代码」'
     pipelineNote.value = error.value
     return
   }
-  await onPlan()
-  if (error.value || !planReady.value) {
-    if (!error.value) {
-      error.value = '计划未就绪，未能继续执行生成'
-      pipelineNote.value = error.value
+  // 整段共用一条 SSE，避免 plan 结束关掉再开漏事件
+  openRunEvents()
+  try {
+    await onPlan()
+    if (error.value || !planReady.value) {
+      if (!error.value) {
+        error.value = '计划未就绪，未能继续执行生成'
+        pipelineNote.value = error.value
+      }
+      return
     }
-    return
+    await onExecute()
+  } finally {
+    closeRunEvents()
   }
-  await onExecute()
 }
 
 async function onRestart(opts?: { withFrontend?: boolean }) {
@@ -1133,6 +1296,8 @@ export function usePlatform() {
     readyToConclude,
     readyToPlan,
     pipelineNote,
+    runPipeline,
+    runEventsLive,
     restartInfo,
     frontendStartInfo,
     runLogs,

@@ -36,6 +36,9 @@ func (r *BookRepository) List() []*model.Book {
 }
 
 func (r *BookRepository) Get(id int64) (*model.Book, error) {
+	if id <= 0 {
+		return nil, ErrInvalidArgument
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	b, ok := r.books[id]
@@ -60,6 +63,23 @@ func (r *BookRepository) Create(b *model.Book) (*model.Book, error) {
 	return &res, nil
 }
 
+func (r *BookRepository) Update(id int64, b *model.Book) (*model.Book, error) {
+	if id <= 0 || b == nil {
+		return nil, ErrInvalidArgument
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	existing, ok := r.books[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	existing.Title = b.Title
+	existing.Author = b.Author
+	existing.Stock = b.Stock
+	cp := *existing
+	return &cp, nil
+}
+
 func (r *BookRepository) Delete(id int64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -78,6 +98,9 @@ func (r *BookRepository) DeleteByID(id int64) error {
 }
 
 func (r *BookRepository) UpdateStock(id int64, delta int) (*model.Book, error) {
+	if id <= 0 {
+		return nil, ErrInvalidArgument
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	b, ok := r.books[id]
@@ -93,6 +116,9 @@ func (r *BookRepository) UpdateStock(id int64, delta int) (*model.Book, error) {
 }
 
 func (r *BookRepository) SetStock(id int64, stock int) (*model.Book, error) {
+	if id <= 0 {
+		return nil, ErrInvalidArgument
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	b, ok := r.books[id]

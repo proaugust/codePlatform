@@ -1,14 +1,16 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
-import { RouterLink } from 'vue-router'
-import { formatError, getBook, updateStock } from '../api/client'
+import { RouterLink, useRouter } from 'vue-router'
+import { deleteBook, formatError, getBook, updateStock } from '../api/client'
 import type { Book } from '../types'
 
 const props = defineProps<{ id: string }>()
+const router = useRouter()
 
 const book = ref<Book | null>(null)
 const loading = ref(false)
 const saving = ref(false)
+const deleting = ref(false)
 const stockInput = ref('')
 const errorCode = ref('')
 const errorMessage = ref('')
@@ -64,9 +66,15 @@ async function saveStock() {
     return
   }
 
+  const delta = value - book.value.stock
+  if (delta === 0) {
+    notice.value = '库存未发生变化'
+    return
+  }
+
   saving.value = true
   try {
-    const updated = await updateStock(book.value.id, value)
+    const updated = await updateStock(book.value.id, delta)
     book.value = updated
     stockInput.value = String(updated.stock)
     notice.value = '库存更新成功'
@@ -74,6 +82,28 @@ async function saveStock() {
     setError(error)
   } finally {
     saving.value = false
+  }
+}
+
+async function removeBook() {
+  if (!book.value) return
+  errorCode.value = ''
+  errorMessage.value = ''
+  notice.value = ''
+
+  const confirmed = window.confirm(
+    `确定要删除《${book.value.title}》（ID: ${book.value.id}）吗？此操作不可恢复。`
+  )
+  if (!confirmed) return
+
+  deleting.value = true
+  try {
+    await deleteBook(book.value.id)
+    await router.push('/books')
+  } catch (error) {
+    setError(error)
+  } finally {
+    deleting.value = false
   }
 }
 
@@ -118,6 +148,14 @@ onMounted(load)
             {{ saving ? '保存中…' : '保存库存' }}
           </button>
         </form>
+      </div>
+
+      <div class="danger-panel">
+        <h3>删除图书</h3>
+        <p class="muted">删除后不可恢复，请谨慎操作。</p>
+        <button class="btn danger" type="button" :disabled="deleting" @click="removeBook">
+          {{ deleting ? '删除中…' : '删除该图书' }}
+        </button>
       </div>
     </template>
 

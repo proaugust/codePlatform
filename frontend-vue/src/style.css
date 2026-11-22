@@ -448,6 +448,152 @@ body.resizing-tree {
   border-top: 1px solid #e2e8f0;
 }
 
+.agent-pipeline {
+  margin-top: 0.75rem;
+  padding: 0.85rem 0.95rem 1rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  min-height: 12.5rem;
+}
+
+.agent-pipeline.live {
+  border-color: #93c5fd;
+  background: #f0f9ff;
+}
+
+.pipeline-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.65rem;
+  font-size: 0.9rem;
+}
+
+.live-dot {
+  display: inline-block;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.pipeline-nodes {
+  list-style: none;
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  row-gap: 0.65rem;
+  gap: 0;
+  margin: 0;
+  padding: 0.15rem 0 0.25rem;
+  overflow-x: auto;
+}
+
+.pipeline-nodes > li {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 3.4rem;
+  flex: 0 0 auto;
+  padding-bottom: 0.25rem;
+}
+
+.pipeline-nodes .node-dot {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  border: 2px solid #cbd5e1;
+  background: #fff;
+  z-index: 1;
+}
+
+.pipeline-nodes .node-label {
+  margin-top: 0.35rem;
+  font-size: 0.72rem;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.pipeline-nodes .node-edge {
+  position: absolute;
+  top: 0.3rem;
+  left: calc(50% + 0.45rem);
+  width: calc(100% - 0.9rem);
+  height: 2px;
+  background: #e2e8f0;
+}
+
+.pipeline-nodes .node.done .node-dot {
+  border-color: #16a34a;
+  background: #16a34a;
+}
+
+.pipeline-nodes .node.done .node-label {
+  color: #166534;
+}
+
+.pipeline-nodes .node.done .node-edge,
+.pipeline-nodes .node.current .node-edge {
+  background: #86efac;
+}
+
+.pipeline-nodes .node.current .node-dot {
+  border-color: #2563eb;
+  background: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.25);
+}
+
+.pipeline-nodes .node.current .node-label {
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+.pipeline-nodes .node.failed .node-dot {
+  border-color: #dc2626;
+  background: #dc2626;
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.2);
+}
+
+.pipeline-nodes .node.failed .node-label {
+  color: #b91c1c;
+  font-weight: 600;
+}
+
+.pipeline-status {
+  margin: 0.65rem 0 0;
+  font-size: 0.85rem;
+  color: #334155;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.pipeline-status.err {
+  color: #b91c1c;
+}
+
+.pipeline-trail {
+  list-style: none;
+  margin: 0.55rem 0 0;
+  padding: 0.35rem 0 0;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  /* ~8 行步骤可见 */
+  min-height: calc(1.5em * 8);
+  max-height: calc(1.5em * 8);
+  overflow: auto;
+  border-top: 1px solid #e2e8f0;
+}
+
+.pipeline-trail > li {
+  padding: 0.05rem 0;
+}
+
 .chat-summary {
   margin: 0 0 0.5rem;
   padding: 0.5rem 0.65rem;

@@ -21,12 +21,18 @@ func (h *BookHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/books", h.List)
 	mux.HandleFunc("POST /api/books", h.Create)
 	mux.HandleFunc("GET /api/books/{id}", h.Get)
+	mux.HandleFunc("PUT /api/books/{id}", h.Update)
 	mux.HandleFunc("DELETE /api/books/{id}", h.Delete)
 	mux.HandleFunc("PATCH /api/books/{id}/stock", h.UpdateStock)
 }
 
 type createBookRequest struct {
-	ID     *int64 `json:"id"`
+	Title  string `json:"title"`
+	Author string `json:"author"`
+	Stock  int    `json:"stock"`
+}
+
+type updateBookRequest struct {
 	Title  string `json:"title"`
 	Author string `json:"author"`
 	Stock  int    `json:"stock"`
@@ -52,10 +58,6 @@ func (h *BookHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid request body")
 		return
 	}
-	if req.ID != nil && *req.ID <= 0 {
-		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "图书 id 必须为大于 0 的整数")
-		return
-	}
 	book, err := h.svc.CreateBook(req.Title, req.Author, req.Stock)
 	if err != nil {
 		writeServiceError(w, err)
@@ -77,6 +79,24 @@ func (h *BookHandler) Get(w http.ResponseWriter, r *http.Request) {
 	writeSuccess(w, http.StatusOK, "success", book)
 }
 
+func (h *BookHandler) Update(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	var req updateBookRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid request body")
+		return
+	}
+	book, err := h.svc.UpdateBook(id, req.Title, req.Author, req.Stock)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeSuccess(w, http.StatusOK, "success", book)
+}
+
 func (h *BookHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseID(w, r)
 	if !ok {
@@ -86,7 +106,7 @@ func (h *BookHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
-	writeSuccess(w, http.StatusOK, "deleted", map[string]any{"id": id})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *BookHandler) UpdateStock(w http.ResponseWriter, r *http.Request) {
@@ -119,9 +139,9 @@ func (h *BookHandler) UpdateStock(w http.ResponseWriter, r *http.Request) {
 	writeSuccess(w, http.StatusOK, "success", book)
 }
 
-func parseID(w http.ResponseWriter, r *http.Request) (int, bool) {
+func parseID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	raw := r.PathValue("id")
-	id, err := strconv.Atoi(raw)
+	id, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || id <= 0 {
 		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "图书 id 必须为大于 0 的整数")
 		return 0, false
@@ -142,4 +162,24 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		}
 	}
 	writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "internal server error")
+}
+
+type apiResponse struct {
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+	Data    any    `json:"data,omitempty"`
+}
+
+func writeSuccess(w http.ResponseWriter, status int, message string, data any) {
+	writeJSON(w, status, apiResponse{Message: message, Data: data})
+}
+
+func writeError(w http.ResponseWriter, status int, code, message string) {
+	writeJSON(w, status, apiResponse{Code: code, Message: message})
+}
+
+func writeJSON(w http.ResponseWriter, status int, payload any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(payload)
 }

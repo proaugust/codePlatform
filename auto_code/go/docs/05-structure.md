@@ -40,27 +40,33 @@
 ## API 面
 
 - `* GET /health` — `main.go`
-- `* GET /{$}` — `main.go`
 - `* GET /api/books` — `main.go`
 - `* POST /api/books` — `main.go`
 - `* GET /api/books/{id}` — `main.go`
+- `* PUT /api/books/{id}` — `main.go`
 - `* DELETE /api/books/{id}` — `main.go`
 - `* PATCH /api/books/{id}/stock` — `main.go`
+- `* GET /static/` — `main.go`
+- `* GET /{$}` — `main.go`
 - `GET /health` — `main.go`
-- `GET /{$}` — `main.go`
 - `GET /api/books` — `main.go`
 - `POST /api/books` — `main.go`
 - `GET /api/books/{id}` — `main.go`
+- `PUT /api/books/{id}` — `main.go`
 - `DELETE /api/books/{id}` — `main.go`
 - `PATCH /api/books/{id}/stock` — `main.go`
+- `GET /static/` — `main.go`
+- `GET /{$}` — `main.go`
 - `* GET /api/books` — `internal/handler/book_handler.go`
 - `* POST /api/books` — `internal/handler/book_handler.go`
 - `* GET /api/books/{id}` — `internal/handler/book_handler.go`
+- `* PUT /api/books/{id}` — `internal/handler/book_handler.go`
 - `* DELETE /api/books/{id}` — `internal/handler/book_handler.go`
 - `* PATCH /api/books/{id}/stock` — `internal/handler/book_handler.go`
 - `GET /api/books` — `internal/handler/book_handler.go`
 - `POST /api/books` — `internal/handler/book_handler.go`
 - `GET /api/books/{id}` — `internal/handler/book_handler.go`
+- `PUT /api/books/{id}` — `internal/handler/book_handler.go`
 - `DELETE /api/books/{id}` — `internal/handler/book_handler.go`
 - `PATCH /api/books/{id}/stock` — `internal/handler/book_handler.go`
 - `* GET /{$}` — `internal/handler/static.go`
