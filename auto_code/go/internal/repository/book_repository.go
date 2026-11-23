@@ -4,6 +4,7 @@ import (
 	"errors"
 	"sort"
 	"sync"
+	"time"
 
 	"example.com/autocode/internal/model"
 )
@@ -58,6 +59,10 @@ func (r *BookRepository) Create(b *model.Book) (*model.Book, error) {
 	cp := *b
 	cp.ID = r.nextID
 	r.nextID++
+	now := time.Now().UTC()
+	if cp.CreatedAt.IsZero() {
+		cp.CreatedAt = now
+	}
 	r.books[cp.ID] = &cp
 	res := cp
 	return &res, nil

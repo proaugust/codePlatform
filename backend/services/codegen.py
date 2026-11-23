@@ -52,7 +52,8 @@ def _stack_rules(lang: str, port: int) -> str:
     return (
         "Go stdlib net/http only (go 1.22+ ServeMux method routes OK). "
         "module example.com/autocode. Prefer a compact single main.go implementing all routes. "
-        f"Listen on :{port}. CORS for localhost/127.0.0.1:5173-5175. No third-party web frameworks. "
+        f"Listen on 127.0.0.1:{port} only (not :{port}/0.0.0.0 — avoids Windows Firewall prompts). "
+        "CORS for localhost/127.0.0.1:5173-5175. No third-party web frameworks. "
         "Keep source compact; avoid long comments."
     )
 

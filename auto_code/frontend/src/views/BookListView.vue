@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import { deleteBook, formatError, listBooks, updateStock } from '../api/client'
+import { deleteBook, formatError, listBooks, updateBook, updateStock } from '../api/client'
 import type { Book } from '../types'
 
 const books = ref<Book[]>([])
@@ -14,6 +14,18 @@ const errorCode = ref('')
 const errorMessage = ref('')
 const notice = ref('')
 const editing = ref<Record<number, string>>({})
+
+// 编辑弹窗状态
+const editVisible = ref(false)
+const editSaving = ref(false)
+const editErrorCode = ref('')
+const editErrorMessage = ref('')
+const editForm = reactive({
+  id: 0,
+  title: '',
+  author: '',
+  stock: '0'
+})
 
 function formatTime(value?: string): string {
   if (!value) return '-'
@@ -59,11 +71,65 @@ function selectBook(book: Book) {
 }
 
 function startEdit(book: Book) {
+  clearMessages()
+  editErrorCode.value = ''
+  editErrorMessage.value = ''
+  editForm.id = book.id
+  editForm.title = book.title
+  editForm.author = book.author ?? ''
+  editForm.stock = String(book.stock)
+  editVisible.value = true
+}
+
+function closeEdit() {
+  if (editSaving.value) return
+  editVisible.value = false
+}
+
+async function submitEdit() {
+  editErrorCode.value = ''
+  editErrorMessage.value = ''
+
+  const title = editForm.title.trim()
+  const stockValue = Number(editForm.stock)
+
+  if (!title) {
+    editErrorCode.value = 'VALIDATION_ERROR'
+    editErrorMessage.value = '书名不能为空'
+    return
+  }
+  if (editForm.stock === '' || !Number.isInteger(stockValue) || stockValue < 0) {
+    editErrorCode.value = 'VALIDATION_ERROR'
+    editErrorMessage.value = '库存必须为大于等于 0 的整数'
+    return
+  }
+
+  editSaving.value = true
+  try {
+    const updated = await updateBook(editForm.id, {
+      title,
+      author: editForm.author.trim(),
+      stock: stockValue
+    })
+    books.value = books.value.map((item) => (item.id === updated.id ? updated : item))
+    editVisible.value = false
+    notice.value = `《${updated.title}》已更新`
+    await load()
+  } catch (error) {
+    const info = formatError(error)
+    editErrorCode.value = info.code
+    editErrorMessage.value = info.message
+  } finally {
+    editSaving.value = false
+  }
+}
+
+function startStockEdit(book: Book) {
   editing.value = { ...editing.value, [book.id]: String(book.stock) }
   clearMessages()
 }
 
-function cancelEdit(id: number) {
+function cancelStockEdit(id: number) {
   const next = { ...editing.value }
   delete next[id]
   editing.value = next
@@ -82,7 +148,7 @@ async function saveStock(book: Book) {
 
   const delta = value - book.stock
   if (delta === 0) {
-    cancelEdit(book.id)
+    cancelStockEdit(book.id)
     notice.value = '库存未发生变化'
     return
   }
@@ -91,7 +157,7 @@ async function saveStock(book: Book) {
   try {
     const updated = await updateStock(book.id, delta)
     books.value = books.value.map((item) => (item.id === updated.id ? updated : item))
-    cancelEdit(book.id)
+    cancelStockEdit(book.id)
     notice.value = `《${updated.title}》库存已更新为 ${updated.stock}`
   } catch (error) {
     setError(error)
@@ -110,7 +176,7 @@ async function removeBook(book: Book) {
     await deleteBook(book.id)
     books.value = books.value.filter((item) => item.id !== book.id)
     if (selectedId.value === book.id) selectedId.value = null
-    cancelEdit(book.id)
+    cancelStockEdit(book.id)
     notice.value = `《${book.title}》已删除`
     await load()
   } catch (error) {
@@ -193,7 +259,7 @@ onMounted(load)
           </td>
           <td>{{ formatTime(book.updatedAt) }}</td>
           <td class="actions">
-            <RouterLink class="btn small" :to="`/books/${book.id}`">详情</RouterLink>
+            <button class="btn small primary" type="button" @click="startEdit(book)">编辑</button>
             <template v-if="editing[book.id] !== undefined">
               <button
                 class="btn small primary"
@@ -201,15 +267,16 @@ onMounted(load)
                 :disabled="savingId === book.id"
                 @click="saveStock(book)"
               >
-                {{ savingId === book.id ? '保存中…' : '保存' }}
+                {{ savingId === book.id ? '保存中…' : '保存库存' }}
               </button>
-              <button class="btn small ghost" type="button" @click="cancelEdit(book.id)">
+              <button class="btn small ghost" type="button" @click="cancelStockEdit(book.id)">
                 取消
               </button>
             </template>
-            <button v-else class="btn small" type="button" @click="startEdit(book)">
+            <button v-else class="btn small ghost" type="button" @click="startStockEdit(book)">
               改库存
             </button>
+            <RouterLink class="btn small ghost" :to="`/books/${book.id}`">详情</RouterLink>
             <button
               class="btn small danger"
               type="button"
@@ -223,8 +290,39 @@ onMounted(load)
       </tbody>
     </table>
 
-    <p v-if="selectedId !== null" class="muted">
-      已选择图书 ID：{{ selectedId }}
-    </p>
+    <div v-if="editVisible" class="modal-mask" @click.self="closeEdit">
+      <div class="modal">
+        <header class="modal-head">
+          <h3>编辑图书（ID: {{ editForm.id }}）</h3>
+          <button class="btn small ghost" type="button" @click="closeEdit">关闭</button>
+        </header>
+        <form class="modal-body" @submit.prevent="submitEdit">
+          <p v-if="editErrorMessage" class="alert error">
+            <strong>{{ editErrorCode }}</strong>
+            <span>{{ editErrorMessage }}</span>
+          </p>
+          <label class="field">
+            <span class="label">书名</span>
+            <input v-model="editForm.title" type="text" maxlength="200" />
+          </label>
+          <label class="field">
+            <span class="label">作者</span>
+            <input v-model="editForm.author" type="text" maxlength="200" />
+          </label>
+          <label class="field">
+            <span class="label">库存</span>
+            <input v-model="editForm.stock" type="number" min="0" step="1" />
+          </label>
+          <div class="modal-actions">
+            <button class="btn primary" type="submit" :disabled="editSaving">
+              {{ editSaving ? '保存中…' : '保存' }}
+            </button>
+            <button class="btn ghost" type="button" :disabled="editSaving" @click="closeEdit">
+              取消
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   </section>
 </template>

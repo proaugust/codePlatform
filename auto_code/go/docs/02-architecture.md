@@ -1,25 +1,24 @@
-# 架构
+# 架构设计
 
 ## 分层
-- **Handler 层**（`internal/handler`）：解析 HTTP 请求、路径参数、JSON 请求体，调用 Service，统一输出 JSON 与错误码；`response.go` 提供统一响应封装；`static.go` 托管静态页面。
-- **Service 层**（`internal/service`）：业务校验与编排，定义领域错误（`errors.go`），如 `ErrValidation`、`ErrNotFound`。
-- **Repository 层**（`internal/repository`）：内存数据存储，提供按 id 查询、更新、删除、列表等操作，使用互斥锁保证并发安全。
-- **Model 层**（`internal/model`）：`Book` 结构体（ID、Title、Author、Stock）。
+沿用现有三层结构：
+- Handler 层：`internal/handler/book_handler.go` 负责路由解析、请求解码、响应输出；`response.go` 统一 JSON 与错误码；`static.go` 托管静态页面。
+- Service 层：`internal/service/book_service.go` 承载业务校验与更新逻辑；`errors.go` 定义业务错误。
+- Repository 层：`internal/repository/book_repository.go` 内存存储，提供按 id 查询与更新。
+- Model 层：`internal/model/book.go` 定义 Book 结构体。
 
 ## 技术选型
 - 语言：Go 1.22，module `example.com/autocode`。
-- Web：标准库 `net/http`，使用 Go 1.22 的 `ServeMux` 路径模式（`GET /api/books/{id}` 等）。
-- 存储：进程内内存（map + sync.RWMutex）。
-- 前端：静态 HTML/JS/CSS，由后端同端口托管于 `/` 与 `/static/`。
+- Web：标准库 `net/http`，使用 `http.ServeMux` 路径模式（含 `{id}` 路径参数）。
+- 存储：进程内内存 map/slice，带读写锁。
+- 前端：静态 HTML + 原生 JS，由后端同端口托管。
+
+## 模块职责
+- `main.go`：注册路由、CORS 中间件、启动 8072 端口。
+- `book_handler.go`：新增 `UpdateBook` 处理函数，解析路径 id、解码请求体、调用 service、输出结果。
+- `book_service.go`：新增 `UpdateBook(id, input)`，校验 id/title/stock，调用 repository 更新，返回更新后实体或错误。
+- `book_repository.go`：新增 `Update(book)` 方法，存在则覆盖并返回，不存在返回未找到。
+- 前端页面：列表渲染每行追加「编辑」按钮，弹窗表单提交 PUT 请求。
 
 ## 部署
-- 单进程监听 `:8072`，同时提供 API 与静态页面。
-- 启动方式：在「运行」页启动进程，访问 `http://localhost:8072/`。
-- CORS：允许 `http://localhost:5173`、`http://localhost:5174` 的跨域请求（便于 Vite 开发调试）。
-
-## 请求处理流程（修改图书）
-1. 路由匹配 `PUT /api/books/{id}`。
-2. Handler 解析 id，非法则返回 400 `VALIDATION_ERROR`。
-3. 解析 JSON 请求体，校验 title 非空、stock 非负。
-4. Service 调用 Repository 更新；不存在返回 404 `NOT_FOUND`。
-5. 返回 200 与更新后的图书 JSON。
+单进程监听 `:8072`，静态资源与 API 同源，无需额外反向代理。

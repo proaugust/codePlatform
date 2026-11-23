@@ -163,23 +163,3 @@ func writeServiceError(w http.ResponseWriter, err error) {
 	}
 	writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "internal server error")
 }
-
-type apiResponse struct {
-	Code    string `json:"code,omitempty"`
-	Message string `json:"message,omitempty"`
-	Data    any    `json:"data,omitempty"`
-}
-
-func writeSuccess(w http.ResponseWriter, status int, message string, data any) {
-	writeJSON(w, status, apiResponse{Message: message, Data: data})
-}
-
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, apiResponse{Code: code, Message: message})
-}
-
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
-}

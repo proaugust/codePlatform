@@ -5,10 +5,18 @@ import (
 	"net/http"
 )
 
-type errorBody struct {
-	Code    string `json:"code"`
+type apiResponse struct {
+	Code    int    `json:"code"`
 	Message string `json:"message"`
+	Error   string `json:"error,omitempty"`
+	Data    any    `json:"data,omitempty"`
 }
+
+const (
+	CodeValidationError = "VALIDATION_ERROR"
+	CodeNotFound        = "NOT_FOUND"
+	CodeInternalError   = "INTERNAL_ERROR"
+)
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -19,37 +27,24 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func writeSuccess(w http.ResponseWriter, status int, v any) {
-	writeJSON(w, status, v)
+func writeSuccess(w http.ResponseWriter, status int, message string, data any) {
+	writeJSON(w, status, apiResponse{Code: 0, Message: message, Data: data})
 }
 
 func writeError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorBody{Code: code, Message: message})
-}
-
-func writeMessage(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]string{"message": message})
+	writeJSON(w, status, apiResponse{Code: status, Message: message, Error: code})
 }
 
 func writeValidationError(w http.ResponseWriter, message string) {
-	if message == "" {
-		message = "参数校验失败"
-	}
-	writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", message)
+	writeError(w, http.StatusBadRequest, CodeValidationError, message)
 }
 
 func writeNotFound(w http.ResponseWriter, message string) {
-	if message == "" {
-		message = "资源不存在"
-	}
-	writeError(w, http.StatusNotFound, "NOT_FOUND", message)
+	writeError(w, http.StatusNotFound, CodeNotFound, message)
 }
 
 func writeInternalError(w http.ResponseWriter, message string) {
-	if message == "" {
-		message = "服务内部错误"
-	}
-	writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", message)
+	writeError(w, http.StatusInternalServerError, CodeInternalError, message)
 }
 
 func writeNoContent(w http.ResponseWriter) {

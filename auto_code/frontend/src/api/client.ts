@@ -140,6 +140,14 @@ export function createBook(payload: CreateBookRequest): Promise<Book> {
   })
 }
 
+/** 修改图书：id 以路径为准，请求体 title/author/stock。 */
+export function updateBook(id: number, payload: CreateBookRequest): Promise<Book> {
+  return request<Book>(`/api/books/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload)
+  })
+}
+
 /** 调整库存：后端以 delta 变更（正数增加、负数减少）。 */
 export function updateStock(id: number, delta: number): Promise<Book> {
   return request<Book>(`/api/books/${id}/stock`, {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
@@ -8,8 +9,25 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+const defaultDatabaseURL = "postgresql://postgres:postgres@localhost:5435/ai_test"
+
+const booksSchema = `
+CREATE TABLE IF NOT EXISTS books (
+	id BIGSERIAL PRIMARY KEY,
+	title TEXT NOT NULL,
+	author TEXT NOT NULL,
+	price DOUBLE PRECISION NOT NULL DEFAULT 0 CHECK (price >= 0),
+	stock INT NOT NULL DEFAULT 0 CHECK (stock >= 0),
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+`
 
 type Book struct {
 	ID     int64  `json:"id"`
@@ -53,42 +71,83 @@ var (
 )
 
 type Store struct {
-	mu     sync.RWMutex
-	books  map[int64]*Book
-	nextID int64
+	pool *pgxpool.Pool
 }
 
-func NewStore() *Store {
-	return &Store{books: make(map[int64]*Book), nextID: 1}
-}
-
-func (s *Store) List() []*Book {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]*Book, 0, len(s.books))
-	for _, b := range s.books {
-		cp := *b
-		out = append(out, &cp)
+func NewStore(ctx context.Context, databaseURL string) (*Store, error) {
+	if databaseURL == "" {
+		databaseURL = defaultDatabaseURL
 	}
-	for i := 0; i < len(out); i++ {
-		for j := i + 1; j < len(out); j++ {
-			if out[j].ID < out[i].ID {
-				out[i], out[j] = out[j], out[i]
-			}
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		return nil, err
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	if _, err := pool.Exec(ctx, booksSchema); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	return &Store{pool: pool}, nil
+}
+
+func (s *Store) Close() {
+	if s != nil && s.pool != nil {
+		s.pool.Close()
+	}
+}
+
+func scanBook(row pgx.Row) (*Book, error) {
+	var b Book
+	err := row.Scan(&b.ID, &b.Title, &b.Author, &b.Stock)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errNotFound
 		}
+		return nil, err
 	}
-	return out
+	return &b, nil
+}
+
+func mapStoreError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var ae *apiError
+	if errors.As(err, &ae) {
+		return ae
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23514" {
+		return errValidation
+	}
+	log.Printf("store error: %v", err)
+	return errInternal
+}
+
+func (s *Store) List() ([]*Book, error) {
+	rows, err := s.pool.Query(context.Background(),
+		`SELECT id, title, author, stock FROM books ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]*Book, 0)
+	for rows.Next() {
+		var b Book
+		if err := rows.Scan(&b.ID, &b.Title, &b.Author, &b.Stock); err != nil {
+			return nil, err
+		}
+		out = append(out, &b)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) Get(id int64) (*Book, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	b, ok := s.books[id]
-	if !ok {
-		return nil, errNotFound
-	}
-	cp := *b
-	return &cp, nil
+	return scanBook(s.pool.QueryRow(context.Background(),
+		`SELECT id, title, author, stock FROM books WHERE id = $1`, id))
 }
 
 func validateBook(req bookRequest) (string, string, error) {
@@ -105,13 +164,11 @@ func (s *Store) Create(req bookRequest) (*Book, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	b := &Book{ID: s.nextID, Title: title, Author: author, Stock: req.Stock}
-	s.books[b.ID] = b
-	s.nextID++
-	cp := *b
-	return &cp, nil
+	return scanBook(s.pool.QueryRow(context.Background(),
+		`INSERT INTO books (title, author, stock)
+		 VALUES ($1, $2, $3)
+		 RETURNING id, title, author, stock`,
+		title, author, req.Stock))
 }
 
 func (s *Store) Update(id int64, req bookRequest) (*Book, error) {
@@ -119,41 +176,34 @@ func (s *Store) Update(id int64, req bookRequest) (*Book, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	b, ok := s.books[id]
-	if !ok {
-		return nil, errNotFound
-	}
-	b.Title = title
-	b.Author = author
-	b.Stock = req.Stock
-	cp := *b
-	return &cp, nil
+	return scanBook(s.pool.QueryRow(context.Background(),
+		`UPDATE books
+		 SET title = $2, author = $3, stock = $4, updated_at = NOW()
+		 WHERE id = $1
+		 RETURNING id, title, author, stock`,
+		id, title, author, req.Stock))
 }
 
 func (s *Store) SetStock(id int64, stock int) (*Book, error) {
 	if stock < 0 {
 		return nil, errValidation
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	b, ok := s.books[id]
-	if !ok {
-		return nil, errNotFound
-	}
-	b.Stock = stock
-	cp := *b
-	return &cp, nil
+	return scanBook(s.pool.QueryRow(context.Background(),
+		`UPDATE books
+		 SET stock = $2, updated_at = NOW()
+		 WHERE id = $1
+		 RETURNING id, title, author, stock`,
+		id, stock))
 }
 
 func (s *Store) Delete(id int64) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, ok := s.books[id]; !ok {
+	tag, err := s.pool.Exec(context.Background(), `DELETE FROM books WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
 		return errNotFound
 	}
-	delete(s.books, id)
 	return nil
 }
 
@@ -218,7 +268,13 @@ func cors(next http.Handler) http.Handler {
 }
 
 func main() {
-	store := NewStore()
+	ctx := context.Background()
+	store, err := NewStore(ctx, os.Getenv("DATABASE_URL"))
+	if err != nil {
+		log.Fatalf("connect database: %v", err)
+	}
+	defer store.Close()
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -226,7 +282,12 @@ func main() {
 	})
 
 	mux.HandleFunc("GET /api/books", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, store.List())
+		books, err := store.List()
+		if err != nil {
+			writeError(w, mapStoreError(err))
+			return
+		}
+		writeJSON(w, http.StatusOK, books)
 	})
 
 	mux.HandleFunc("POST /api/books", func(w http.ResponseWriter, r *http.Request) {
@@ -235,12 +296,12 @@ func main() {
 			writeError(w, err)
 			return
 		}
-		b, err := store.Create(req)
+		book, err := store.Create(req)
 		if err != nil {
-			writeError(w, err)
+			writeError(w, mapStoreError(err))
 			return
 		}
-		writeJSON(w, http.StatusCreated, b)
+		writeJSON(w, http.StatusCreated, book)
 	})
 
 	mux.HandleFunc("GET /api/books/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -249,12 +310,12 @@ func main() {
 			writeError(w, err)
 			return
 		}
-		b, err := store.Get(id)
+		book, err := store.Get(id)
 		if err != nil {
-			writeError(w, err)
+			writeError(w, mapStoreError(err))
 			return
 		}
-		writeJSON(w, http.StatusOK, b)
+		writeJSON(w, http.StatusOK, book)
 	})
 
 	mux.HandleFunc("PUT /api/books/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -268,12 +329,12 @@ func main() {
 			writeError(w, err)
 			return
 		}
-		b, err := store.Update(id, req)
+		book, err := store.Update(id, req)
 		if err != nil {
-			writeError(w, err)
+			writeError(w, mapStoreError(err))
 			return
 		}
-		writeJSON(w, http.StatusOK, b)
+		writeJSON(w, http.StatusOK, book)
 	})
 
 	mux.HandleFunc("DELETE /api/books/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -283,7 +344,7 @@ func main() {
 			return
 		}
 		if err := store.Delete(id); err != nil {
-			writeError(w, err)
+			writeError(w, mapStoreError(err))
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -304,30 +365,21 @@ func main() {
 			writeError(w, errValidation)
 			return
 		}
-		b, err := store.SetStock(id, *req.Stock)
+		book, err := store.SetStock(id, *req.Stock)
 		if err != nil {
-			writeError(w, err)
+			writeError(w, mapStoreError(err))
 			return
 		}
-		writeJSON(w, http.StatusOK, b)
+		writeJSON(w, http.StatusOK, book)
 	})
 
-	staticDir := "static"
-	if _, err := os.Stat(staticDir); err == nil {
-		mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir(staticDir))))
-	}
-
+	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		path := staticDir + "/index.html"
-		if _, err := os.Stat(path); err != nil {
-			writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "message": "autocode book service"})
-			return
-		}
-		http.ServeFile(w, r, path)
+		http.ServeFile(w, r, "static/index.html")
 	})
 
-	addr := ":8072"
-	log.Printf("listening on %s", addr)
+	addr := "127.0.0.1:8072"
+	log.Printf("listening on http://%s", addr)
 	if err := http.ListenAndServe(addr, cors(mux)); err != nil {
 		log.Fatal(err)
 	}
