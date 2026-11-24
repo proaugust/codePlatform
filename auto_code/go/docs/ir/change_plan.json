@@ -2,38 +2,22 @@
   "lang": "go",
   "mode": "incremental",
   "approved": true,
-  "summary": "在现有 Go net/http 图书管理项目上增量补齐用户硬需求：实现 PUT /api/books/{id} 修改图书接口，并在前端列表每行增加可见「编辑」按钮与预填弹窗表单，保存后刷新列表，同时保留列表/新增/删除/健康检查与静态托管。",
+  "summary": "以 main.go + PostgreSQL 为唯一运行入口；统一响应包装；库存只认 {stock}；业务前端为 auto_code/frontend；文档对齐；删除未接线 internal/。",
   "modules": [
     {
       "name": "main",
-      "responsibility": "注册路由（含 PUT /api/books/{id}）、CORS 中间件、监听 8072 端口、静态页面托管"
-    },
-    {
-      "name": "handler",
-      "responsibility": "解析路径 id、解码请求体、调用 service、输出统一 JSON 与错误码；新增 UpdateBook 处理函数"
-    },
-    {
-      "name": "service",
-      "responsibility": "UpdateBook 业务校验（id 正整数、title 非空、stock 非负）与更新逻辑，返回更新后实体或业务错误"
-    },
-    {
-      "name": "repository",
-      "responsibility": "内存存储按 id 查询与覆盖更新，刷新 updatedAt，保留 id 与 createdAt"
-    },
-    {
-      "name": "model",
-      "responsibility": "Book 结构体与 JSON 字段定义"
+      "responsibility": "路由、CORS、PG Store、统一 JSON 响应、监听 127.0.0.1:8072"
     },
     {
       "name": "frontend",
-      "responsibility": "静态页面列表渲染每行「编辑」按钮，弹窗表单预填并提交 PUT，成功后关闭并刷新列表，失败展示错误"
+      "responsibility": "Vue 列表编辑弹窗、updateBook PUT、updateStock 发 {stock}"
     }
   ],
   "apis": [
     {
       "method": "GET",
       "path": "/health",
-      "description": "健康检查，返回 200 与 {\"status\":\"ok\"}"
+      "description": "健康检查，返回 {\"status\":\"ok\"}"
     },
     {
       "method": "GET",
@@ -43,127 +27,95 @@
     {
       "method": "POST",
       "path": "/api/books",
-      "description": "新增图书，id 由后端生成，成功 201"
+      "description": "新增图书，201，data 为 Book"
     },
     {
       "method": "GET",
       "path": "/api/books/{id}",
-      "description": "按 id 查询图书，非法 id 400 VALIDATION_ERROR，不存在 404 NOT_FOUND"
+      "description": "按 id 查询"
     },
     {
       "method": "PUT",
       "path": "/api/books/{id}",
-      "description": "修改图书（用户硬需求），请求体 title/author/stock，id 以路径为准；成功 200 返回更新后 Book，非法 id 或校验失败 400 VALIDATION_ERROR，不存在 404 NOT_FOUND"
+      "description": "修改图书，请求体 title/author/stock"
     },
     {
       "method": "DELETE",
       "path": "/api/books/{id}",
-      "description": "删除图书，成功 204，不存在 404 NOT_FOUND，非法 id 400 VALIDATION_ERROR"
+      "description": "删除图书，204"
     },
     {
       "method": "PATCH",
       "path": "/api/books/{id}/stock",
-      "description": "调整库存，保留现有能力，成功 200 返回更新后 Book"
+      "description": "设置库存，请求体仅 {stock} 绝对值"
     },
     {
       "method": "GET",
       "path": "/",
-      "description": "托管前端静态页面"
-    },
-    {
-      "method": "GET",
-      "path": "/static/",
-      "description": "托管前端静态资源"
+      "description": "API 占位 JSON；UI 在 Vite 5175"
     }
   ],
   "data_model": [
     {
-      "name": "Book",
+      "name": "Book (PostgreSQL books)",
       "fields": [
-        "id（int64，主键，后端自增生成）",
-        "title（string，非空）",
-        "author（string，可为空）",
-        "stock（int，>=0）",
-        "createdAt（string RFC3339，创建时写入）",
-        "updatedAt（string RFC3339，每次更新刷新）"
+        "id BIGSERIAL PK",
+        "title TEXT NOT NULL",
+        "author TEXT",
+        "stock INT >= 0",
+        "created_at / updated_at TIMESTAMPTZ"
       ]
     }
   ],
   "tasks": [
     {
       "id": "T1",
-      "title": "补齐 repository 与 service 的修改图书能力",
+      "title": "main.go 统一响应与 PG 契约",
       "deps": [],
-      "files": [
-        "internal/repository/book_repository.go",
-        "internal/service/book_service.go",
-        "internal/service/errors.go"
-      ],
+      "files": ["main.go"],
       "acceptance": [
-        "repository 新增 Update(book) 方法：存在则覆盖 title/author/stock 并刷新 updatedAt、保留 id 与 createdAt，不存在返回未找到错误",
-        "service 新增 UpdateBook(id, input)：id 非正整数、title 去空格为空、stock 为负时返回 VALIDATION_ERROR；图书不存在返回 NOT_FOUND；成功返回更新后 Book",
-        "现有列表/新增/删除/库存调整逻辑保持不变，go build ./... 通过"
+        "成功响应 {code:0,message,data}；失败 {code,message,error}",
+        "PATCH stock 只认 {stock}",
+        "无对 internal 的依赖"
       ]
     },
     {
       "id": "T2",
-      "title": "实现 PUT /api/books/{id} 处理器并接入路由",
-      "deps": [
-        "T1"
-      ],
+      "title": "Vue 库存与编辑对齐",
+      "deps": ["T1"],
       "files": [
-        "internal/handler/book_handler.go",
-        "internal/handler/response.go",
-        "main.go"
+        "../frontend/src/api/client.ts",
+        "../frontend/src/views/BookListView.vue",
+        "../frontend/src/views/BookDetailView.vue"
       ],
       "acceptance": [
-        "book_handler.go 新增 UpdateBook 处理函数：解析路径 id、解码 JSON 请求体、调用 service、按统一结构输出",
-        "main.go 注册 PUT /api/books/{id} 路由并保留 GET /health、列表、新增、删除、库存调整与静态托管",
-        "PUT /api/books/1 合法请求体返回 200 且 data 字段已更新；PUT /api/books/999999 返回 404 NOT_FOUND；PUT /api/books/abc 或 title 为空返回 400 VALIDATION_ERROR"
+        "updateStock 发送 {stock}",
+        "列表编辑调用 PUT 后刷新"
       ]
     },
     {
       "id": "T3",
-      "title": "前端列表增加可见编辑入口与弹窗表单",
-      "deps": [
-        "T2"
-      ],
+      "title": "文档与 spec 对齐 PG",
+      "deps": ["T1"],
       "files": [
-        "static/index.html",
-        "static/app.js",
-        "static/style.css"
+        "docs/01-requirements.md",
+        "docs/02-architecture.md",
+        "docs/03-database.md",
+        "docs/04-api.md",
+        "docs/05-structure.md",
+        "docs/06-review.md",
+        "docs/ir/spec.json",
+        "docs/ir/change_plan.json"
       ],
       "acceptance": [
-        "图书列表每行渲染可见「编辑」按钮，点击弹出编辑表单并预填当前 title/author/stock",
-        "保存时调用 PUT /api/books/{id}，成功后关闭弹窗并刷新列表显示新值",
-        "保存失败时在弹窗内展示后端返回的错误信息，弹窗不关闭",
-        "现有新增、删除交互与二次确认保持可用"
-      ]
-    },
-    {
-      "id": "T4",
-      "title": "端到端联调与冒烟验收",
-      "deps": [
-        "T3"
-      ],
-      "files": [
-        "main.go",
-        "internal/handler/book_handler.go",
-        "static/app.js"
-      ],
-      "acceptance": [
-        "启动服务后 GET /health 返回 200 且 body 为 {\"status\":\"ok\"}",
-        "curl 验证 PUT /api/books/1 返回 200 且字段更新、PUT /api/books/999999 返回 404 NOT_FOUND、PUT /api/books/abc 返回 400 VALIDATION_ERROR",
-        "浏览器访问 http://localhost:8072/ 可见列表每行「编辑」按钮，编辑保存后列表显示新值",
-        "现有列表、新增（201）、删除（204）接口回归通过"
+        "文档写明 PostgreSQL 与 main.go 唯一入口",
+        "不再以内存/internal/static 为主路径"
       ]
     }
   ],
   "risks": [
-    "端口存在 8080 与 8072 冲突信息，本次以 8072 为准，需在运行页确认实际监听端口",
-    "数据为内存存储，重启后修改结果丢失，持久化未确认",
-    "新增图书 id 由后端生成，若前端仍传 id 需忽略以避免 VALIDATION_ERROR",
-    "冒烟脚本曾把 201 误判为失败，需修正断言避免误报",
-    "静态页面路径与文件名需与现有托管实现一致，否则编辑入口不可见"
+    "运行前需 PostgreSQL 可达，否则进程 Fatal",
+    "已有库若含旧 price 列，CREATE IF NOT EXISTS 不会改表结构，需人工迁移时注意",
+    "平台 codegen 仍偏好单文件 main.go，增量勿再生成 internal/"
   ]
 }

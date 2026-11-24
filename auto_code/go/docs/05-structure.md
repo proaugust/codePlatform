@@ -8,68 +8,24 @@
 - 路径：`go.mod`
 - module：`example.com/autocode`
 - go：`1.22`
+- 依赖：`github.com/jackc/pgx/v5`（PostgreSQL）
 
-## 三层路径
+## 源码
 
-### Handler
+- **唯一入口**：`main.go`（路由 + Store + 响应）
+- 已删除：`internal/`（历史分层，未接线）
 
-- `internal/handler/book_handler.go`
-- `internal/handler/response.go`
-- `internal/handler/static.go`
+## 配套前端
 
-### Service
+- `auto_code/frontend`（与 go 同级），端口 5175
 
-- `internal/service/book_service.go`
-- `internal/service/errors.go`
+## API 面（均在 main.go）
 
-### Repository
-
-- `internal/repository/book_repository.go`
-
-### 源码路径摘要
-
-- `internal/handler/book_handler.go`
-- `internal/handler/response.go`
-- `internal/handler/static.go`
-- `internal/model/book.go`
-- `internal/repository/book_repository.go`
-- `internal/service/book_service.go`
-- `internal/service/errors.go`
-- `main.go`
-
-## API 面
-
-- `* GET /health` — `main.go`
-- `* GET /api/books` — `main.go`
-- `* POST /api/books` — `main.go`
-- `* GET /api/books/{id}` — `main.go`
-- `* PUT /api/books/{id}` — `main.go`
-- `* DELETE /api/books/{id}` — `main.go`
-- `* PATCH /api/books/{id}/stock` — `main.go`
-- `* GET /static/` — `main.go`
-- `* GET /{$}` — `main.go`
-- `GET /health` — `main.go`
-- `GET /api/books` — `main.go`
-- `POST /api/books` — `main.go`
-- `GET /api/books/{id}` — `main.go`
-- `PUT /api/books/{id}` — `main.go`
-- `DELETE /api/books/{id}` — `main.go`
-- `PATCH /api/books/{id}/stock` — `main.go`
-- `GET /static/` — `main.go`
-- `GET /{$}` — `main.go`
-- `* GET /api/books` — `internal/handler/book_handler.go`
-- `* POST /api/books` — `internal/handler/book_handler.go`
-- `* GET /api/books/{id}` — `internal/handler/book_handler.go`
-- `* PUT /api/books/{id}` — `internal/handler/book_handler.go`
-- `* DELETE /api/books/{id}` — `internal/handler/book_handler.go`
-- `* PATCH /api/books/{id}/stock` — `internal/handler/book_handler.go`
-- `GET /api/books` — `internal/handler/book_handler.go`
-- `POST /api/books` — `internal/handler/book_handler.go`
-- `GET /api/books/{id}` — `internal/handler/book_handler.go`
-- `PUT /api/books/{id}` — `internal/handler/book_handler.go`
-- `DELETE /api/books/{id}` — `internal/handler/book_handler.go`
-- `PATCH /api/books/{id}/stock` — `internal/handler/book_handler.go`
-- `* GET /{$}` — `internal/handler/static.go`
-- `* GET /static/` — `internal/handler/static.go`
-- `GET /{$}` — `internal/handler/static.go`
-- `GET /static/` — `internal/handler/static.go`
+- `GET /health`
+- `GET /api/books`
+- `POST /api/books`
+- `GET /api/books/{id}`
+- `PUT /api/books/{id}`
+- `DELETE /api/books/{id}`
+- `PATCH /api/books/{id}/stock`
+- `GET /`

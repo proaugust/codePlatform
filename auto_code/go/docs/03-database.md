@@ -1,25 +1,21 @@
-# 数据存储设计（内存存储）
+# 数据存储设计（PostgreSQL）
 
-> 本项目沿用内存存储，无关系型数据库。以下为逻辑数据模型，字段与 Go 结构体及 JSON 对应。
+> 持久化使用 PostgreSQL。默认连接：`postgresql://postgres:postgres@localhost:5435/ai_test`（可用环境变量 `DATABASE_URL` 覆盖）。启动时 `CREATE TABLE IF NOT EXISTS`。
 
-## 实体：Book
+## 表：books
 
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
-| id | int64 | 主键，唯一，>0，后端自增生成 | 图书 ID |
-| title | string | 非空，去空格后长度>0 | 书名 |
-| author | string | 可为空字符串 | 作者 |
-| stock | int | >=0 | 库存 |
-| createdAt | string(RFC3339) | 创建时写入 | 创建时间 |
-| updatedAt | string(RFC3339) | 每次更新刷新 | 更新时间 |
+| id | BIGSERIAL | 主键 | 图书 ID，自增 |
+| title | TEXT | NOT NULL | 书名 |
+| author | TEXT | NOT NULL DEFAULT '' | 作者 |
+| stock | INT | NOT NULL DEFAULT 0，CHECK ≥ 0 | 库存绝对值 |
+| created_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() | 创建时间 |
+| updated_at | TIMESTAMPTZ | NOT NULL DEFAULT NOW() | 更新时间（UPDATE 时刷新） |
 
-## 存储结构
-- `map[int64]*Book` 加 `sync.RWMutex` 保护并发读写。
-- 自增 id 计数器 `nextID int64`，新增时 `nextID++`。
-
-## 关系
-单实体，无外键关联。
+## API 映射（JSON Book）
+- `id` / `title` / `author` / `stock`（当前接口不暴露 created_at / updated_at / price）。
 
 ## 更新语义
-- 按 id 查找，不存在返回 `NOT_FOUND`。
-- 覆盖 title、author、stock，刷新 updatedAt，保留 id 与 createdAt。
+- PUT：按 id 覆盖 title、author、stock，刷新 `updated_at`。
+- PATCH stock：只接受 `{ "stock": N }` 绝对值覆盖，不接受 `delta`。

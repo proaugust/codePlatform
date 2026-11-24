@@ -130,15 +130,14 @@ async function saveStock() {
     return
   }
 
-  const delta = value - book.value.stock
-  if (delta === 0) {
+  if (value === book.value.stock) {
     notice.value = '库存未发生变化'
     return
   }
 
   saving.value = true
   try {
-    const updated = await updateStock(book.value.id, delta)
+    const updated = await updateStock(book.value.id, value)
     book.value = updated
     stockInput.value = String(updated.stock)
     notice.value = '库存更新成功'

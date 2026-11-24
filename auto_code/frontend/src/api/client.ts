@@ -58,7 +58,12 @@ function readErrorFields(payload: unknown): {
     root.error && typeof root.error === 'object' ? (root.error as Record<string, unknown>) : null
   const src = nested ?? root
   return {
-    code: typeof src.code === 'string' ? src.code : undefined,
+    code:
+      typeof src.code === 'string'
+        ? src.code
+        : typeof root.error === 'string'
+          ? root.error
+          : undefined,
     message: typeof src.message === 'string' ? src.message : undefined,
     path: typeof src.path === 'string' ? src.path : typeof root.path === 'string' ? root.path : undefined,
     timestamp:
@@ -148,11 +153,11 @@ export function updateBook(id: number, payload: CreateBookRequest): Promise<Book
   })
 }
 
-/** 调整库存：后端以 delta 变更（正数增加、负数减少）。 */
-export function updateStock(id: number, delta: number): Promise<Book> {
+/** 调整库存：请求体只认绝对值 { stock }。 */
+export function updateStock(id: number, stock: number): Promise<Book> {
   return request<Book>(`/api/books/${id}/stock`, {
     method: 'PATCH',
-    body: JSON.stringify({ delta })
+    body: JSON.stringify({ stock })
   })
 }
 

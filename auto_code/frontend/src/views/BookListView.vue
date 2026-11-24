@@ -146,8 +146,7 @@ async function saveStock(book: Book) {
     return
   }
 
-  const delta = value - book.stock
-  if (delta === 0) {
+  if (value === book.stock) {
     cancelStockEdit(book.id)
     notice.value = '库存未发生变化'
     return
@@ -155,7 +154,7 @@ async function saveStock(book: Book) {
 
   savingId.value = book.id
   try {
-    const updated = await updateStock(book.id, delta)
+    const updated = await updateStock(book.id, value)
     books.value = books.value.map((item) => (item.id === updated.id ? updated : item))
     cancelStockEdit(book.id)
     notice.value = `《${updated.title}》库存已更新为 ${updated.stock}`

@@ -21,8 +21,7 @@ const booksSchema = `
 CREATE TABLE IF NOT EXISTS books (
 	id BIGSERIAL PRIMARY KEY,
 	title TEXT NOT NULL,
-	author TEXT NOT NULL,
-	price DOUBLE PRECISION NOT NULL DEFAULT 0 CHECK (price >= 0),
+	author TEXT NOT NULL DEFAULT '',
 	stock INT NOT NULL DEFAULT 0 CHECK (stock >= 0),
 	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -46,13 +45,12 @@ type stockRequest struct {
 	Stock *int `json:"stock"`
 }
 
-type errorBody struct {
-	Code    string `json:"code"`
+// 统一响应：成功 {code:0,message,data}；失败 {code:<http>,message,error:<码>}
+type apiResponse struct {
+	Code    int    `json:"code"`
 	Message string `json:"message"`
-}
-
-type errorEnvelope struct {
-	Error errorBody `json:"error"`
+	Error   string `json:"error,omitempty"`
+	Data    any    `json:"data,omitempty"`
 }
 
 type apiError struct {
@@ -215,13 +213,17 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	}
 }
 
+func writeSuccess(w http.ResponseWriter, status int, message string, data any) {
+	writeJSON(w, status, apiResponse{Code: 0, Message: message, Data: data})
+}
+
 func writeError(w http.ResponseWriter, err error) {
 	var ae *apiError
 	if !errors.As(err, &ae) {
 		log.Printf("internal error: %v", err)
 		ae = errInternal
 	}
-	writeJSON(w, ae.status, errorEnvelope{Error: errorBody{Code: ae.code, Message: ae.message}})
+	writeJSON(w, ae.status, apiResponse{Code: ae.status, Message: ae.message, Error: ae.code})
 }
 
 func parseID(r *http.Request) (int64, error) {
@@ -287,7 +289,7 @@ func main() {
 			writeError(w, mapStoreError(err))
 			return
 		}
-		writeJSON(w, http.StatusOK, books)
+		writeSuccess(w, http.StatusOK, "ok", books)
 	})
 
 	mux.HandleFunc("POST /api/books", func(w http.ResponseWriter, r *http.Request) {
@@ -301,7 +303,7 @@ func main() {
 			writeError(w, mapStoreError(err))
 			return
 		}
-		writeJSON(w, http.StatusCreated, book)
+		writeSuccess(w, http.StatusCreated, "created", book)
 	})
 
 	mux.HandleFunc("GET /api/books/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -315,7 +317,7 @@ func main() {
 			writeError(w, mapStoreError(err))
 			return
 		}
-		writeJSON(w, http.StatusOK, book)
+		writeSuccess(w, http.StatusOK, "ok", book)
 	})
 
 	mux.HandleFunc("PUT /api/books/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -334,7 +336,7 @@ func main() {
 			writeError(w, mapStoreError(err))
 			return
 		}
-		writeJSON(w, http.StatusOK, book)
+		writeSuccess(w, http.StatusOK, "ok", book)
 	})
 
 	mux.HandleFunc("DELETE /api/books/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -361,7 +363,7 @@ func main() {
 			writeError(w, err)
 			return
 		}
-		if req.Stock == nil {
+		if req.Stock == nil || *req.Stock < 0 {
 			writeError(w, errValidation)
 			return
 		}
@@ -370,12 +372,15 @@ func main() {
 			writeError(w, mapStoreError(err))
 			return
 		}
-		writeJSON(w, http.StatusOK, book)
+		writeSuccess(w, http.StatusOK, "ok", book)
 	})
 
-	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
+	// 业务前端在 auto_code/frontend（Vite 5175）；根路径仅作可选占位
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "static/index.html")
+		writeJSON(w, http.StatusOK, map[string]string{
+			"status":  "ok",
+			"message": "autocode book API; UI at Vite :5175",
+		})
 	})
 
 	addr := "127.0.0.1:8072"
